@@ -1,0 +1,20 @@
+# Secrets — NE JAMAIS committer
+.env
+
+# Données locales (base, logs, backups, sauvegardes)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Front
+frontend/node_modules/
+frontend/dist/
+
+# Python
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Divers
+.DS_Store

@@ -1,0 +1,64 @@
+{
+  "_doc": {
+    "revente_fr": "Valeur de revente FR en EUROS (prix marché français). Le bénéfice = revente_fr - prix_detaxe_scrapé_converti_en_eur. Modifiable directement.",
+    "prix_achat_ref_jpy": "Prix d'achat détaxé de référence en yens fourni par Hugo (sert d'ancrage, pas au calcul direct).",
+    "references": "Toutes les écritures possibles de la réf (avec/sans points). Le matching ignore points/espaces/casse."
+  },
+  "targets": [
+    {
+      "id": "omega-speedmaster-32630405001002",
+      "marque": "Omega",
+      "modele": "Speedmaster",
+      "references": [
+        "326.30.40.50.01.002",
+        "32630405001002"
+      ],
+      "calibre": "3330",
+      "prix_achat_ref_jpy": 510000,
+      "revente_fr_min": 3469,
+      "revente_fr_max": 3469,
+      "criteres": {
+        "etat_min": "très bon",
+        "annee_min": null
+      },
+      "couts_optionnels_eur": 0
+    },
+    {
+      "id": "omega-speedmaster-32630405001001-variante",
+      "marque": "Omega",
+      "modele": "Speedmaster Racing (variante cadran .001)",
+      "references": [
+        "326.30.40.50.01.001",
+        "32630405001001"
+      ],
+      "calibre": "3330",
+      "prix_achat_ref_jpy": 510000,
+      "revente_fr_min": 3469,
+      "revente_fr_max": 3469,
+      "criteres": {
+        "etat_min": "très bon",
+        "annee_min": null
+      },
+      "couts_optionnels_eur": 0
+    },
+    {
+      "id": "omega-speedmaster-32430385001001",
+      "marque": "Omega",
+      "modele": "Speedmaster",
+      "references": [
+        "324.30.38.50.01.001",
+        "32430385001001",
+        "3240385001001"
+      ],
+      "calibre": "3330",
+      "prix_achat_ref_jpy": 631000,
+      "revente_fr_min": 4126,
+      "revente_fr_max": 4126,
+      "criteres": {
+        "etat_min": "très bon",
+        "annee_min": null
+      },
+      "couts_optionnels_eur": 0
+    }
+  ]
+}

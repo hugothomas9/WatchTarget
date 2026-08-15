@@ -1,0 +1,10 @@
+# Dépendances de PRODUCTION (image Docker) — volontairement légères.
+# Le matching image (torch/open_clip) et Playwright sont OPTIONNELS et exclus ici :
+# sans eux, le pricing EveryWatch retombe sur l'agrégat (dégradation propre, pas de crash).
+requests>=2.31
+beautifulsoup4>=4.12
+fastapi>=0.110
+uvicorn[standard]>=0.29
+curl_cffi>=0.6
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1
