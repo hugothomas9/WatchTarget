@@ -406,6 +406,51 @@ def delete_cible(conn, cible_id: int, telegram_id="__all__") -> bool:
     return (cur.rowcount or 0) > 0
 
 
+def _clause_proprietaire(telegram_id):
+    """Fragment SQL + arg pour restreindre une écriture au propriétaire de l'alerte.
+    `"__all__"` = pas de restriction (usage local/admin), comme delete_cible."""
+    if telegram_id == "__all__":
+        return "", []
+    if telegram_id is None:
+        return " AND telegram_id IS NULL", []
+    return " AND telegram_id=?", [telegram_id]
+
+
+def get_cible(conn, cible_id: int, telegram_id="__all__"):
+    """Une alerte, ou None si elle n'existe pas / n'appartient pas à cet utilisateur."""
+    conn.row_factory = sqlite3.Row
+    cond, args = _clause_proprietaire(telegram_id)
+    return conn.execute(f"SELECT * FROM cibles WHERE id=?{cond}",
+                        [cible_id] + args).fetchone()
+
+
+def set_cible_actif(conn, cible_id: int, actif: bool, telegram_id="__all__") -> None:
+    """Met une alerte en pause (actif=0) ou la réactive. En pause, elle reste visible
+    mais n'apparaît plus dans `list_cibles(actives_only=True)` → plus de notification."""
+    cond, args = _clause_proprietaire(telegram_id)
+    conn.execute(f"UPDATE cibles SET actif=? WHERE id=?{cond}",
+                 [1 if actif else 0, cible_id] + args)
+    conn.commit()
+
+
+def update_cible(conn, cible_id: int, mots_cles=None, libelle=None,
+                 telegram_id="__all__") -> None:
+    """Modifie les mots-clés et/ou le libellé. Un champ à None n'est pas touché."""
+    sets, vals = [], []
+    if mots_cles is not None:
+        sets.append("mots_cles=?")
+        vals.append(mots_cles.strip())
+    if libelle is not None:
+        sets.append("libelle=?")
+        vals.append(libelle.strip())
+    if not sets:
+        return
+    cond, args = _clause_proprietaire(telegram_id)
+    conn.execute(f"UPDATE cibles SET {', '.join(sets)} WHERE id=?{cond}",
+                 vals + [cible_id] + args)
+    conn.commit()
+
+
 def get_cibles_matches(conn, telegram_id="__all__"):
     """Montres DISPO qui matchent au moins une cible active, enrichies comme les
     opportunités (prix vendu EW + marge). Chaque montre porte `cibles_match` = la
