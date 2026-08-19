@@ -173,6 +173,36 @@ une seule alerte.
 4. **Notifications push** : le bot doit-il permettre de couper *toutes* ses
    notifications d'un coup, ou la pause par alerte suffit-elle ? (non bloquant)
 
+### Suites à donner, laissées ouvertes par la revue finale (2026-08-19)
+
+Ces trois points n'ont **pas** été corrigés parce que les fichiers concernés portaient
+des modifications non commitées d'un autre chantier (observabilité / historique de
+prix) : y toucher aurait embarqué ce travail dans les commits du bot.
+
+1. **Le plafond de 20 alertes par utilisateur est contournable par le site.** Le bot
+   refuse la 21ᵉ alerte (`MAX_ALERTES_PAR_USER` dans `backend/bot.py`), mais
+   `POST /api/alertes` dans `backend/api.py` n'a aucun plafond. Un utilisateur connecté
+   au site peut donc en créer autant qu'il veut, puis ouvrir « Mes alertes » dans le
+   bot. L'impact est limité depuis que le comptage se fait en une seule passe, mais la
+   protection n'est pas complète. → appliquer le même plafond côté API.
+2. **Commentaire trompeur** dans `backend/db.py`, fonction `matches_pour_cible` :
+   « une donnée jamais chargée ne peut pas fuiter ». C'est vrai pour EveryWatch et
+   Chrono24, **faux pour le détaxé** — `watches` porte `prix_ht`, `prix_detaxe_jpy`,
+   `prix_detaxe_eur`, `benef_min/max` et la fonction fait `SELECT *`. La vraie barrière
+   est la **liste blanche** de `bot_ui.preparer_montres` (9 clés, désormais vérifiée par
+   égalité d'ensembles dans les tests). Purement documentaire, mais à corriger pour ne
+   pas induire en erreur le prochain lecteur.
+3. **`db._watches_matchant`** (fonction privée) est appelée depuis `backend/bot.py`.
+   Dette d'encapsulation assumée : rapatrier le helper de comptage dans `db.py` quand
+   ce fichier sera libéré.
+
+**Non fait, à lancer par Hugo :** la **parité PostgreSQL** n'a jamais été exécutée sur
+cette branche (`TEST_DATABASE_URL=postgresql://… python -m pytest -q`). Rien de non
+portable n'a été trouvé à la lecture (`ON CONFLICT(col)`, `BIGINT`, tables déclarées
+dans `_TABLES` du conftest), mais le bot est le premier process à écrire dans
+`bot_state`/`bot_meta` en production. Et le **test manuel dans Telegram** avec un vrai
+token reste à faire.
+
 ---
 
 ## 8. Historique des sessions
