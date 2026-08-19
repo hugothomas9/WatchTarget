@@ -21,6 +21,15 @@ l'affichage via `backend/noms.py` (glossaire familles + couleurs + termes couran
 original conservé en info-bulle. À étendre au fil des cas non couverts.
 
 ## Fait récemment
+- **Vue mobile (2026-08-19)** — cartes sous 700px (photo + détaxé/vendu/marge/liquidité)
+  pour tous les onglets ; desktop inchangé. L'appli devient utilisable en boutique.
+- **Historique de prix (2026-08-19)** — table `price_history`, un point par
+  changement de prix enregistré à chaque collecte, `GET /api/historique/{uid}`.
+  La donnée s'accumule dès maintenant ; UI (sparkline/fiche) et alertes de baisse
+  à brancher ensuite.
+- **Observabilité connecteurs (2026-08-19)** — table `collecte_runs` (rendement par
+  boutique à chaque run) + alerte Telegram admin si une boutique part en erreur ou
+  tombe à 0 fiche en full. Fini les connecteurs cassés en silence.
 - **4 correctifs critiques post-revue (2026-08-19)** — (1) SQL des TTL portable
   PostgreSQL (`db.iso_ago`, le worker prod re-fonctionne en entier) ; (2) faille
   d'accès anonyme aux alertes fermée (`LOCAL_ADMIN`, 401/404, cookie Secure,

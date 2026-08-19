@@ -25,6 +25,34 @@ def enrich(w: dict, targets: list, rate: float) -> dict:
     return w
 
 
+def _observer_collecte(conn, mode: str, rapport: list) -> None:
+    """OBSERVABILITÉ : journalise le rendement par boutique (collecte_runs) et
+    alerte l'admin Telegram quand un connecteur est en panne — erreur levée, ou
+    chute à 0 fiche en mode full (structure du site changée → « succès » vide).
+    En incrémental, 0 fiche = pas de nouvel arrivage : normal, pas d'alerte."""
+    ts = db.now_iso()
+    problemes = []
+    for boutique, n, erreur in rapport:
+        if erreur:
+            problemes.append(f"• {boutique} : en erreur ({erreur[:120]})")
+        elif mode == "full" and n == 0:
+            prev = conn.execute(
+                "SELECT fetched FROM collecte_runs WHERE boutique=? AND mode='full' "
+                "AND erreur IS NULL ORDER BY run_at DESC LIMIT 1",
+                (boutique,)).fetchone()
+            if prev and (prev["fetched"] or 0) > 0:
+                problemes.append(f"• {boutique} : 0 fiche (précédent : "
+                                 f"{prev['fetched']}) — sélecteur cassé ?")
+        conn.execute(
+            "INSERT INTO collecte_runs (run_at, mode, boutique, fetched, erreur) "
+            "VALUES (?,?,?,?,?)", (ts, mode, boutique, n, erreur))
+    conn.commit()
+    if problemes:
+        from . import telegram as tg
+        tg.envoyer("⚠️ <b>Collecte : connecteur(s) en panne</b>\n"
+                   + "\n".join(problemes))
+
+
 def run(mode: str = "incremental", only: list | None = None) -> dict:
     """Collecte les boutiques du registre, enrichit, upsert en base.
 
@@ -39,12 +67,14 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
     seen |= {r[0] for r in conn.execute("SELECT uid FROM watches")}
 
     fetched = new = 0
+    rapport = []       # (boutique, fiches, erreur) → observabilité + alerte admin
     for entry in registry.BOUTIQUES:
         if only and entry["connector"] not in only:
             continue
         # ISOLATION PAR BOUTIQUE : un site en panne (WAF, down, structure changée)
         # ne doit JAMAIS empêcher la collecte des suivantes — avant ce garde-fou,
         # un simple 403 sur brands_to_scan() tuait le run entier.
+        shop_count = 0
         try:
             cls = registry.CONNECTORS[entry["connector"]]
             connector = cls(entry)
@@ -60,7 +90,6 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
                     _buf.clear()
 
             connector.seen_sink = sink
-            shop_count = 0
             try:
                 for w in connector.collect(mode):
                     fetched += 1
@@ -77,6 +106,7 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
                         db.record_seen(conn, buf)  # flush du reliquat même interrompu
                     except Exception:
                         pass   # ne pas MASQUER l'erreur d'origine du connecteur
+            rapport.append((entry["boutique"], shop_count, None))
         except Exception as e:
             print(f"  !! {entry['boutique']} en échec "
                   f"({type(e).__name__}: {e}) — boutique suivante", flush=True)
@@ -87,6 +117,12 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
                 conn.rollback()
             except Exception:
                 pass
+            rapport.append((entry["boutique"], shop_count,
+                            f"{type(e).__name__}: {e}"))
+    try:
+        _observer_collecte(conn, mode, rapport)
+    except Exception:
+        pass
     try:
         from .notify import notifier_tout
         notifier_tout()   # alertes Discord (no-op sans webhook configuré)

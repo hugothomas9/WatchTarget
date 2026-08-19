@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS ew_prices (
     PRIMARY KEY (ref_norm, dial, material)
 );
 
+-- Historique de prix : un point par CHANGEMENT de prix (pas un par passage de
+-- collecte) — matière première des tendances, sparklines et alertes de baisse.
+CREATE TABLE IF NOT EXISTS price_history (
+    uid             TEXT NOT NULL,
+    prix_ttc        REAL,
+    prix_detaxe_eur REAL,
+    seen_at         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_price_history_uid ON price_history(uid);
+
+-- Observabilité : rendement de chaque run de collecte, par boutique. Une boutique
+-- en erreur ou tombée à 0 en full déclenche une alerte Telegram admin — sans ça,
+-- un connecteur cassé collecterait 0 fiche en silence pendant des semaines.
+CREATE TABLE IF NOT EXISTS collecte_runs (
+    run_at   TEXT NOT NULL,
+    mode     TEXT,
+    boutique TEXT NOT NULL,
+    fetched  INTEGER,
+    erreur   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_collecte_runs_btq ON collecte_runs(boutique, run_at);
+
 -- Anti-doublon des alertes (Discord/Telegram) : une alerte par (uid, type).
 CREATE TABLE IF NOT EXISTS notified (
     uid   TEXT NOT NULL,
@@ -195,10 +217,13 @@ def init_db(conn):
 
 
 def upsert_watch(conn, w: dict) -> bool:
-    """Insère une montre ou met à jour last_seen/prix si elle existe. True si nouvelle."""
+    """Insère une montre ou met à jour last_seen/prix si elle existe. True si nouvelle.
+    Enregistre au passage l'HISTORIQUE : un point à l'arrivée puis un point par
+    changement de prix (jamais un point par simple passage de collecte)."""
     ts = now_iso()
     status = "vendue" if w.get("vendue") else "dispo"
-    exists = conn.execute("SELECT 1 FROM watches WHERE uid = ?", (w["uid"],)).fetchone()
+    exists = conn.execute("SELECT prix_ttc FROM watches WHERE uid = ?",
+                          (w["uid"],)).fetchone()
     if exists:
         if w.get("prix_ttc") is None and w.get("prix_ht") is None:
             # Scrape sans prix (sélecteur cassé, page anti-bot…) : on ne fait
@@ -206,6 +231,9 @@ def upsert_watch(conn, w: dict) -> bool:
             conn.execute("UPDATE watches SET last_seen=?, status=? WHERE uid=?",
                          (ts, status, w["uid"]))
         else:
+            if (w.get("prix_ttc") is not None
+                    and w.get("prix_ttc") != exists["prix_ttc"]):
+                _add_price_point(conn, w, ts)     # le prix a bougé → un point
             conn.execute(
                 """UPDATE watches SET last_seen=?, prix_ttc=?, prix_ht=?,
                    prix_detaxe_jpy=?, prix_detaxe_eur=?, benef_min=?, benef_max=?,
@@ -244,8 +272,25 @@ def upsert_watch(conn, w: dict) -> bool:
          json.dumps(w.get("images", []), ensure_ascii=False), status, ts, ts,
          json.dumps(w.get("raw", {}), ensure_ascii=False)),
     )
+    if w.get("prix_ttc") is not None:
+        _add_price_point(conn, w, ts)             # point initial à l'arrivée
     conn.commit()
     return True
+
+
+def _add_price_point(conn, w: dict, ts: str):
+    conn.execute(
+        "INSERT INTO price_history (uid, prix_ttc, prix_detaxe_eur, seen_at) "
+        "VALUES (?,?,?,?)",
+        (w["uid"], w.get("prix_ttc"), w.get("prix_detaxe_eur"), ts))
+
+
+def get_price_history(conn, uid: str) -> list:
+    """Points de prix d'une montre, du plus ancien au plus récent."""
+    conn.row_factory = sqlite3.Row
+    return conn.execute(
+        "SELECT prix_ttc, prix_detaxe_eur, seen_at FROM price_history "
+        "WHERE uid=? ORDER BY seen_at", (uid,)).fetchall()
 
 
 SORTS = {

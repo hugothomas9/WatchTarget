@@ -188,6 +188,13 @@ def favoris(sort: str = "spread"):
         return _rows(db.get_favorites(conn, sort=sort))
 
 
+@app.get("/api/historique/{uid:path}")
+def historique(uid: str):
+    """Historique de prix d'une montre (un point par changement de prix)."""
+    with _conn() as conn:
+        return [dict(p) for p in db.get_price_history(conn, uid)]
+
+
 @app.get("/api/marques")
 def marques():
     with _conn() as conn:

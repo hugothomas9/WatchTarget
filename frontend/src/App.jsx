@@ -33,6 +33,76 @@ const yen = (v) => v == null ? '—' : '¥' + Math.round(v).toLocaleString('fr-F
 // étirer le <select> sur toute la barre (option la plus large = largeur du select)
 const _selStyle = { maxWidth: 200, flex: '0 0 auto' }
 
+// Vue MOBILE : l'utilisateur type est debout dans une boutique au Japon, sur son
+// téléphone — un tableau de 15 colonnes y est inutilisable. Sous 700px on bascule
+// en cartes ; le desktop garde le tableau inchangé.
+function useIsMobile() {
+  const [m, setM] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 700px)')
+    const on = e => setM(e.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return m
+}
+
+// Carte mobile : photo + identité + les 3 chiffres qui décident (détaxé, vendu
+// réel, marge) — `enriched` = vue opportunités/cibles/favoris (métriques EW).
+function CarteMontre({ w, onFav, isFav, enriched }) {
+  const px = w.ew_median_eur ?? w.median_eur
+  const chiffre = { fontSize: 13 }
+  return (
+    <div style={{ border: '1px solid #e2e2e8', borderRadius: 10, padding: 10,
+                  display: 'flex', gap: 10,
+                  opacity: w.status === 'vendue' ? 0.45 : 1 }}>
+      {w.images?.[0]
+        ? <img src={w.images[0]} alt="" loading="lazy"
+               onError={e => { e.currentTarget.style.visibility = 'hidden' }}
+               style={{ width: 72, height: 72, objectFit: 'cover',
+                        borderRadius: 8, flex: '0 0 auto' }} />
+        : <div style={{ width: 72, height: 72, background: '#f2f2f5',
+                        borderRadius: 8, flex: '0 0 auto' }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+          <b title={w.modele_original || w.modele}
+             style={{ overflow: 'hidden', textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap' }}>
+            {w.marque} {w.modele}
+          </b>
+          <FavStar uid={w.uid} isFav={isFav} onFav={onFav} />
+        </div>
+        <div style={{ color: '#666', fontSize: 12, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {w.reference} · {w.boutique}{w.etat ? ` · ${w.etat}` : ''}
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 6, flexWrap: 'wrap',
+                      alignItems: 'baseline' }}>
+          {enriched ? (<>
+            <span style={chiffre}>détaxé <b>{eur(w.prix_detaxe_eur)}</b></span>
+            <span style={chiffre}>vendu <b>{px != null ? eur(px) : '—'}</b></span>
+            {w.spread_eur != null &&
+              <span style={{ color: '#0a7d2c', fontWeight: 700 }}>
+                +{eur(w.spread_eur)}</span>}
+            {w.ew_sales_12m != null &&
+              <span style={{ color: '#888', fontSize: 12 }}>
+                {w.ew_sales_12m} vte/an</span>}
+          </>) : (<>
+            <span style={chiffre}>{yen(w.prix_ttc)}</span>
+            <span style={chiffre}>détaxé <b>{eur(w.prix_detaxe_eur)}</b></span>
+          </>)}
+        </div>
+        <div style={{ marginTop: 6, fontSize: 13 }}>
+          {w.status === 'vendue'
+            ? <span style={{ color: '#b00020' }}>vendue</span>
+            : <a href={w.url} target="_blank" rel="noreferrer">voir la fiche →</a>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // étoile favori : pleine (dorée) si déjà en favori, creuse sinon. Transition douce.
 function FavStar({ uid, isFav, onFav }) {
   return (
@@ -176,6 +246,7 @@ export default function App() {
   const [alertes, setAlertes] = useState([])
   const [nouvelleAlerte, setNouvelleAlerte] = useState('')
   const [me, setMe] = useState(null)   // utilisateur Telegram connecté (ou null)
+  const mobile = useIsMobile()
 
   const loadMe = () =>
     fetch('/api/me').then(r => r.json()).then(d => setMe(d.user)).catch(() => {})
@@ -384,6 +455,14 @@ export default function App() {
       <p style={{ color: '#666', fontSize: 13 }}>
         {rows.length} montre(s){rows.length >= LIMIT ? ` (max affiché : ${LIMIT})` : ''}
       </p>
+      {mobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map(w => (
+            <CarteMontre key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)}
+              enriched={page === 'opportunites' || page === 'favoris' || page === 'cibles'} />
+          ))}
+        </div>
+      ) : (
       <table border="1" cellPadding="6" style={{ borderCollapse: 'collapse', width: '100%', fontSize: 14 }}>
         {(page === 'opportunites' || page === 'favoris' || page === 'cibles') ? (
           <thead><tr style={{ background: '#f3f3f3' }}>
@@ -410,6 +489,7 @@ export default function App() {
           ? <OppRow key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} />
           : <Row key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} />)}</tbody>
       </table>
+      )}
       {rows.length === 0 && !error && (page === 'opportunites'
         ? <p>Aucune opportunité pour l'instant — lance un scan marché :
             <code> python -m backend.market_scan</code></p>
