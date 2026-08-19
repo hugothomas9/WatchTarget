@@ -198,3 +198,51 @@ def test_saisie_tres_longue_est_tronquee_au_renommage_et_aux_mots_cles(tmp_path,
     bot.traiter_update(conn, _msg("z" * 4096), RATE)
     mots_cles = db.get_cible(conn, cid, telegram_id=111)["mots_cles"]
     assert len(mots_cles) <= bot.LONGUEUR_MAX_SAISIE
+
+
+def test_callback_data_malforme_ne_leve_pas_et_ne_touche_pas_la_base(tmp_path, monkeypatch):
+    """Un callback_data est une donnée entièrement contrôlée par le client (bot
+    PUBLIC) : un fragment forgé ou tronqué ne doit jamais lever d'exception, et
+    l'alerte existante doit rester strictement intacte."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    avant = dict(db.get_cible(conn, cid, telegram_id=111))
+    for data in ("a:xyz", "v:5:abc", "v:abc:1", "a:", "v:",
+                 f"a:{cid}:action_inconnue"):
+        actions = bot.traiter_update(conn, _cb(data), RATE)
+        # au plus un "answer" (accusé de réception du callback), jamais plus
+        assert all(a["type"] == "answer" for a in actions), (data, actions)
+        apres = dict(db.get_cible(conn, cid, telegram_id=111))
+        assert apres == avant, data
+
+
+def test_alerte_supprimee_pendant_conversation_puis_message_texte(tmp_path, monkeypatch):
+    """L'alerte est supprimée PENDANT que l'utilisateur est en conversation
+    (attente_libelle) : le message texte suivant ne doit ni lever, ni recréer
+    l'alerte, et doit refermer la conversation plutôt que de laisser
+    l'utilisateur coincé en attente."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    bot.traiter_update(conn, _cb(f"a:{cid}:ren"), RATE)
+    assert db.get_bot_etape(conn, 111)[0] == "attente_libelle"
+    db.delete_cible(conn, cid, telegram_id=111)
+    actions = bot.traiter_update(conn, _msg("Nouveau nom"), RATE)
+    assert bot.MSG_ACCES in _textes(actions)
+    assert db.get_bot_etape(conn, 111) is None      # pas coincé en attente
+    assert db.get_cible(conn, cid, telegram_id=111) is None   # pas recréée
+
+
+def test_alerte_reattribuee_a_un_autre_pendant_conversation_puis_message_texte(tmp_path, monkeypatch):
+    """L'alerte n'est pas supprimée mais a changé de propriétaire pendant la
+    conversation (ex. transfert admin) : le propriétaire d'origine ne doit plus
+    pouvoir la modifier via son message texte en attente."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    bot.traiter_update(conn, _cb(f"a:{cid}:kw"), RATE)
+    assert db.get_bot_etape(conn, 111)[0] == "attente_kw"
+    conn.execute("UPDATE cibles SET telegram_id=? WHERE id=?", (222, cid))
+    conn.commit()
+    actions = bot.traiter_update(conn, _msg("nouveaux mots-clés"), RATE)
+    assert bot.MSG_ACCES in _textes(actions)
+    assert db.get_bot_etape(conn, 111) is None      # pas coincé en attente
+    assert db.get_cible(conn, cid, telegram_id=222)["mots_cles"] == "rolex daytona"

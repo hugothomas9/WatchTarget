@@ -30,6 +30,16 @@ def _tronquer(texte: str) -> str:
     return texte[:LONGUEUR_MAX_SAISIE]
 
 
+def _int_ou_none(s):
+    """int(s) sûr : None si `s` n'est pas un entier — un `callback_data` est une
+    donnée entièrement contrôlée par le client (bot PUBLIC), un fragment forgé ou
+    tronqué (« a:xyz », « v:5:abc », « a: ») ne doit jamais lever d'exception."""
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
 # --- actions (structures inertes ; l'exécution réseau est plus bas) ---
 def _send(chat_id, ecran) -> dict:
     return {"type": "send", "chat_id": chat_id, "text": ecran["text"],
@@ -146,10 +156,15 @@ def _traiter_callback(conn, uid, chat_id, message_id, data, rate):
 
     bouts = data.split(":")
     if bouts[0] == "v" and len(bouts) == 3:
-        return _voir_montres(conn, uid, chat_id, int(bouts[1]), int(bouts[2]), rate)
+        cible_id, page = _int_ou_none(bouts[1]), _int_ou_none(bouts[2])
+        if cible_id is None or page is None:
+            return []
+        return _voir_montres(conn, uid, chat_id, cible_id, page, rate)
 
     if bouts[0] == "a" and len(bouts) >= 2:
-        cible_id = int(bouts[1])
+        cible_id = _int_ou_none(bouts[1])
+        if cible_id is None:
+            return []
         action = bouts[2] if len(bouts) > 2 else ""
         cible = db.get_cible(conn, cible_id, telegram_id=uid)
         if not cible:
