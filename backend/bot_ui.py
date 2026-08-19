@@ -257,3 +257,39 @@ def ecran_demande_kw(alerte: dict) -> dict:
     return _ecran(f"Envoie les nouveaux mots-clés (actuels : "
                   f"<code>{_esc(alerte.get('mots_cles'))}</code>).",
                   [[_b("◀ Annuler", f"a:{alerte['id']}")]])
+
+
+def ecran_alerte_vide(alerte: dict) -> dict:
+    texte = (f"Aucune montre en stock ne correspond à « {_esc(_nom(alerte))} » "
+             "pour l'instant.\nTu recevras un message dès qu'une arrive.")
+    return _ecran(texte, [[_b("◀ Retour à l'alerte", f"a:{alerte['id']}")]])
+
+
+def page_montres(alerte: dict, montres: list[dict], page: int) -> dict:
+    """Une page de résultats : en-tête + jusqu'à REFS_PAR_PAGE blocs-photo + navigation.
+
+    `page` est 1-indexée et ramenée dans les bornes (un vieux bouton ne doit pas
+    provoquer une page vide).
+    """
+    blocs = grouper_par_reference(montres)
+    pages = max(1, (len(blocs) + REFS_PAR_PAGE - 1) // REFS_PAR_PAGE)
+    page = min(max(1, int(page or 1)), pages)
+    debut = (page - 1) * REFS_PAR_PAGE
+    visibles = blocs[debut:debut + REFS_PAR_PAGE]
+
+    entete = (f"🎯 <b>{_esc(_nom(alerte))}</b> — {len(montres)} annonces · "
+              f"{len(blocs)} réf. · page {page}/{pages}\n"
+              "<i>(stock vérifié quotidiennement)</i>")
+
+    nav = []
+    if page > 1:
+        nav.append(_b("◀ Préc", f"v:{alerte['id']}:{page - 1}"))
+    if page < pages:
+        nav.append(_b("Suivant ▶", f"v:{alerte['id']}:{page + 1}"))
+    clavier = ([nav] if nav else []) + \
+        [[_b("◀ Retour à l'alerte", f"a:{alerte['id']}")]]
+
+    return {"entete": entete,
+            "blocs": [{"photo": b["photo"], "caption": legende_bloc(b)}
+                      for b in visibles],
+            "keyboard": clavier, "page": page, "pages": pages}

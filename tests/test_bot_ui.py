@@ -256,3 +256,55 @@ def test_ecran_alerte_echappe_le_html():
     assert "&lt;b&gt;hack&lt;/b&gt;" in e["text"]
     assert "<b>hack</b>" not in e["text"]
     assert "a &amp; b" in e["text"]
+
+
+ALERTE = {"id": 7, "libelle": "Ma Daytona", "mots_cles": "rolex daytona", "actif": 1}
+
+
+def _stock(n_refs, par_ref=2):
+    montres = []
+    for i in range(n_refs):
+        for j in range(par_ref):
+            montres.append(w(uid=f"u{i}-{j}", ref=f"REF{i:03d}",
+                             prix_ttc=3000000 + i * 100000 + j))
+    return bot_ui.preparer_montres(montres, RATE)
+
+
+def test_page_montres_entete_et_pagination():
+    p = bot_ui.page_montres(ALERTE, _stock(7), page=1)
+    assert "Ma Daytona" in p["entete"]
+    assert "14 annonces" in p["entete"] and "7 réf" in p["entete"]
+    assert "page 1/3" in p["entete"]                      # 7 réfs / 3 par page
+    assert "vérifié quotidiennement" in p["entete"]
+    assert len(p["blocs"]) == bot_ui.REFS_PAR_PAGE
+    assert p["pages"] == 3
+
+
+def test_page_montres_navigation_bornee():
+    p1 = bot_ui.page_montres(ALERTE, _stock(7), page=1)
+    cbs1 = [b["callback_data"] for l in p1["keyboard"] for b in l]
+    assert "v:7:2" in cbs1 and "v:7:0" not in cbs1        # pas de « Préc » en page 1
+    p3 = bot_ui.page_montres(ALERTE, _stock(7), page=3)
+    cbs3 = [b["callback_data"] for l in p3["keyboard"] for b in l]
+    assert "v:7:2" in cbs3 and "v:7:4" not in cbs3        # pas de « Suivant » en fin
+    assert "a:7" in cbs3                                  # retour à l'alerte
+    assert len(p3["blocs"]) == 1                          # 7 = 3 + 3 + 1
+
+
+def test_page_montres_page_hors_bornes_est_ramenee():
+    p = bot_ui.page_montres(ALERTE, _stock(2), page=99)
+    assert p["page"] == 1 and p["pages"] == 1 and len(p["blocs"]) == 2
+
+
+def test_page_montres_chaque_bloc_a_titre_et_legende_valide():
+    p = bot_ui.page_montres(ALERTE, _stock(3), page=1)
+    for bloc in p["blocs"]:
+        assert bloc["caption"].startswith("<b>")
+        assert len(bloc["caption"]) <= bot_ui.LIMITE_LEGENDE
+        assert bloc["photo"] == "https://img/1.jpg"
+
+
+def test_ecran_alerte_vide():
+    e = bot_ui.ecran_alerte_vide(ALERTE)
+    assert "Ma Daytona" in e["text"]
+    assert "a:7" in [b["callback_data"] for l in e["keyboard"] for b in l]
