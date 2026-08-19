@@ -12,7 +12,7 @@ import pytest
 from backend import config, db
 
 _TABLES = ["watches", "favorites", "seen", "cibles",
-           "market_prices", "ew_prices", "notified"]
+           "market_prices", "ew_prices", "notified", "bot_state", "bot_meta"]
 
 
 @pytest.fixture(autouse=True)

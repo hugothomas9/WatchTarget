@@ -110,6 +110,21 @@ CREATE TABLE IF NOT EXISTS notified (
     PRIMARY KEY (uid, type)
 );
 
+-- Bot Telegram : état de conversation (le bot attend une réponse texte).
+-- En base et non en mémoire : un redéploiement ne doit pas bloquer un utilisateur.
+CREATE TABLE IF NOT EXISTS bot_state (
+    telegram_id  BIGINT PRIMARY KEY,
+    etape        TEXT,        -- 'attente_mots_cles' | 'attente_libelle' | 'attente_kw'
+    data         TEXT,        -- JSON, ex. {"cible_id": 7}
+    maj_le       TEXT
+);
+
+-- Bot Telegram : petites valeurs de service (offset getUpdates…).
+CREATE TABLE IF NOT EXISTS bot_meta (
+    cle     TEXT PRIMARY KEY,
+    valeur  TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_watches_target ON watches(target_id);
 CREATE INDEX IF NOT EXISTS idx_watches_boutique ON watches(boutique);
 """
@@ -416,6 +431,48 @@ def get_cibles_matches(conn, telegram_id="__all__"):
         out.append(d)
     out.sort(key=lambda d: (d["spread_eur"] is None, -(d["spread_eur"] or 0)))
     return out
+
+
+# --- Bot Telegram : état de conversation et méta ---
+def set_bot_etape(conn, telegram_id: int, etape: str, data: dict | None = None) -> None:
+    """Mémorise que le bot attend une réponse de cet utilisateur. Remplace l'étape
+    précédente (une seule conversation en cours par personne)."""
+    conn.execute(
+        "INSERT INTO bot_state (telegram_id, etape, data, maj_le) VALUES (?,?,?,?) "
+        "ON CONFLICT(telegram_id) DO UPDATE SET etape=excluded.etape, "
+        "data=excluded.data, maj_le=excluded.maj_le",
+        (telegram_id, etape, json.dumps(data or {}), now_iso()))
+    conn.commit()
+
+
+def get_bot_etape(conn, telegram_id: int):
+    """(etape, data) si une conversation est en cours, sinon None."""
+    row = conn.execute("SELECT etape, data FROM bot_state WHERE telegram_id=?",
+                       (telegram_id,)).fetchone()
+    if not row or not row["etape"]:
+        return None
+    try:
+        data = json.loads(row["data"] or "{}")
+    except (TypeError, ValueError):
+        data = {}
+    return row["etape"], data
+
+
+def clear_bot_etape(conn, telegram_id: int) -> None:
+    conn.execute("DELETE FROM bot_state WHERE telegram_id=?", (telegram_id,))
+    conn.commit()
+
+
+def get_bot_meta(conn, cle: str):
+    row = conn.execute("SELECT valeur FROM bot_meta WHERE cle=?", (cle,)).fetchone()
+    return row["valeur"] if row else None
+
+
+def set_bot_meta(conn, cle: str, valeur: str) -> None:
+    conn.execute(
+        "INSERT INTO bot_meta (cle, valeur) VALUES (?,?) "
+        "ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur", (cle, str(valeur)))
+    conn.commit()
 
 
 def upsert_market_price(conn, ref_norm: str, stats: dict | None, erreur: str = ""):
