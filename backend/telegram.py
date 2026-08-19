@@ -34,25 +34,27 @@ def envoyer(text: str, chat_id=None) -> bool:
         return False
 
 
-def _message(w: dict, libelles: list[str]) -> str:
-    """Message d'alerte : montre + prix vendu EW + marge + lien."""
-    marque = w.get("marque", "") or ""
-    modele = (w.get("modele", "") or "")[:60]
-    ref = w.get("reference", "") or ""
-    prix_jp = w.get("prix_detaxe_eur")
-    ew = w.get("ew_median_eur")
-    spread = w.get("spread_eur")
-    lignes = [f"🎯 <b>{marque} {modele}</b>",
-              f"Réf {ref} · {w.get('boutique','')}"]
-    if prix_jp:
-        lignes.append(f"Prix détaxé JP : <b>{round(prix_jp):,} €</b>".replace(",", " "))
-    if ew:
-        s = f" · marge +{round(spread):,} €".replace(",", " ") if spread else ""
-        lignes.append(f"Vendu réel EW : {round(ew):,} €".replace(",", " ") + s)
+def _message(w: dict, libelles: list[str], rate: float | None = None) -> str:
+    """Message d'alerte, MÊME RENDU SOBRE que le bot : titre (marque modèle — réf),
+    l'annonce, l'alerte déclenchée, le lien.
+
+    Aucun prix détaxé, aucune donnée EveryWatch, aucune marge : les notifications
+    partent à des utilisateurs publics (spec 2026-08-17, §9).
+    """
+    from . import bot_ui
+    if rate is None:
+        from . import fx
+        rate = fx.get_rate()
+    m = bot_ui.preparer_montres([w], rate)[0]
+    # bot_ui.titre_bloc() renvoie du texte NON échappé (l'échappement se fait au
+    # point d'usage) ; le message part en parse_mode=HTML donc un < > ou & dans la
+    # marque/le modèle casserait le message ou injecterait du balisage.
+    lignes = [f"🎯 <b>{bot_ui._esc(bot_ui.titre_bloc(m))}</b>",
+              bot_ui.ligne_annonce(m).lstrip("• ")]
     if libelles:
-        lignes.append("Cible : " + ", ".join(libelles))
-    if w.get("url"):
-        lignes.append(w["url"])
+        lignes.append("Alerte : " + ", ".join(libelles))
+    # PAS de ligne d'URL séparée : bot_ui.ligne_annonce() se termine déjà par un
+    # lien HTML `→ <a href="...">Voir</a>` — en rajouter une dupliquerait le lien.
     return "\n".join(lignes)
 
 
@@ -66,7 +68,8 @@ def notifier_cibles(conn=None) -> int:
     regles = db.list_cibles(conn, actives_only=True)
     n = 0
     if regles and config.TELEGRAM_BOT_TOKEN:
-        from . import verify_dispo
+        from . import fx, verify_dispo
+        rate = fx.get_rate()
         matches = db.get_cibles_matches(conn)
         for w in matches:
             blob = _cibles.blob_recherche(w)
@@ -85,7 +88,8 @@ def notifier_cibles(conn=None) -> int:
             for c in cibles_ok:
                 typ = f"cible:{c['id']}"
                 dest = c["telegram_id"] if "telegram_id" in c.keys() else None
-                if envoyer(_message(w, [c["libelle"] or c["mots_cles"]]), chat_id=dest):
+                if envoyer(_message(w, [c["libelle"] or c["mots_cles"]], rate=rate),
+                           chat_id=dest):
                     _marquer(conn, w["uid"], typ)
                     n += 1
     if close:
