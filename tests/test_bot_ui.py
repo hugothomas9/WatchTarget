@@ -1,4 +1,6 @@
 """Rendu du bot Telegram — module PUR : aucun réseau, aucune DB."""
+import re
+
 from backend import bot_ui
 
 RATE = 0.0060      # 1 JPY = 0.006 EUR → 3 210 000 ¥ = 19 260 €
@@ -133,3 +135,46 @@ def test_aucun_champ_interdit_dans_le_rendu():
     legende = bot_ui.legende_bloc(bot_ui.grouper_par_reference(montres)[0])
     for valeur in ("26 000", "27 400", "8 100", "700", "57 ventes", "EveryWatch"):
         assert valeur not in legende
+
+
+def test_legende_bloc_titre_seul_trop_long_est_tronque():
+    """Cas extrême : le TITRE seul (marque/modèle/référence à rallonge) dépasse déjà
+    1024 caractères une fois entouré de <b></b> et échappé — même sans aucune annonce
+    à côté. La légende ne doit JAMAIS dépasser LIMITE_LEGENDE : en dernier recours,
+    après avoir retiré toutes les annonces, c'est le titre lui-même qui est raccourci
+    (une légende tronquée vaut mieux qu'une légende invalide que Telegram rejette)."""
+    montres = bot_ui.preparer_montres(
+        [w(marque="A" * 600, modele="B" * 600, ref="C" * 600)], RATE)
+    legende = bot_ui.legende_bloc(bot_ui.grouper_par_reference(montres)[0])
+    assert len(legende) <= bot_ui.LIMITE_LEGENDE
+    assert legende.startswith("<b>")
+    assert legende.endswith("…</b>")
+
+
+def test_legende_bloc_titre_tronque_ne_coupe_pas_une_entite_html():
+    """Le titre raccourci en dernier recours ne doit jamais couper une entité HTML
+    (`&amp;`, `&lt;`, …) en plein milieu : la coupe se fait sur le texte brut, avant
+    l'échappement, jamais sur la chaîne déjà échappée."""
+    montres = bot_ui.preparer_montres(
+        [w(marque="&" * 500, modele="B" * 500, ref="C" * 500)], RATE)
+    legende = bot_ui.legende_bloc(bot_ui.grouper_par_reference(montres)[0])
+    assert len(legende) <= bot_ui.LIMITE_LEGENDE
+    interieur = legende[len("<b>"):-len("</b>")]
+    if interieur.endswith("…"):
+        interieur = interieur[:-1]
+    # toute séquence commençant par « & » doit être une entité complète (finit par ';')
+    for entite in re.finditer(r"&[a-zA-Z#0-9]*;?", interieur):
+        assert entite.group().endswith(";"), f"entité HTML coupée : {entite.group()!r}"
+
+
+def test_legende_bloc_titre_survit_toujours_quand_les_annonces_debordent():
+    """Non-régression explicite du ruling : quand ce sont les annonces qui font
+    déborder (titre raisonnable), le titre reste ENTIER, jamais tronqué — seul le cas
+    où le titre lui-même dépasse justifie de le raccourcir."""
+    montres = bot_ui.preparer_montres(
+        [w(uid=f"u{i}", boutique="B" * 90, etat="E" * 90, prix_ttc=3000000 + i)
+         for i in range(8)], RATE)
+    legende = bot_ui.legende_bloc(bot_ui.grouper_par_reference(montres)[0])
+    assert legende.startswith("<b>Rolex Daytona — 126500LN</b>")
+    assert "\n<b>" not in legende  # le titre complet est bien la première ligne, intact
+    assert len(legende) <= bot_ui.LIMITE_LEGENDE

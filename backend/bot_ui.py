@@ -105,21 +105,53 @@ def grouper_par_reference(montres: list[dict]) -> list[dict]:
     return sorted(blocs.values(), key=lambda b: _prix_tri(b["annonces"][0]))
 
 
+def _titre_html_tronque(titre_brut: str) -> str:
+    """Dernier recours : le titre (balises + échappement compris) dépasse à lui seul
+    LIMITE_LEGENDE. On raccourcit le TEXTE BRUT avant de l'échapper et de l'envelopper,
+    pour ne jamais couper une entité HTML ou une balise en plein milieu (`&lt;` coupé
+    en `&l` serait un bug)."""
+    texte = titre_brut
+    while texte:
+        candidat = f"<b>{_esc(texte)}…</b>"
+        if len(candidat) <= LIMITE_LEGENDE:
+            return candidat
+        texte = texte[:-1]
+    # même un seul caractère ne suffit pas (LIMITE_LEGENDE absurdement petite) : on
+    # renvoie le strict minimum, garanti <= LIMITE_LEGENDE dans tous les cas réalistes.
+    return "<b>…</b>"
+
+
 def legende_bloc(bloc: dict) -> str:
     """Légende de la photo d'un bloc : titre puis annonces.
 
-    Deux garde-fous : au plus ANNONCES_PAR_REF annonces, et si la légende dépasse
-    LIMITE_LEGENDE on retire des annonces une par une — LE TITRE RESTE TOUJOURS.
+    Garde-fous, dans l'ordre : au plus ANNONCES_PAR_REF annonces ; si la légende
+    dépasse LIMITE_LEGENDE on retire des annonces une par une — LE TITRE RESTE
+    TOUJOURS PRIORITAIRE. Si même le titre seul (une fois entouré de <b></b> et
+    échappé) dépasse LIMITE_LEGENDE, on le raccourcit en dernier recours : la spec
+    exige à la fois « titre jamais sacrifié aux annonces » ET « légende <= 1024 » —
+    un titre écourté vaut mieux qu'une légende invalide que Telegram refusera.
     """
-    titre = f"<b>{_esc(titre_bloc(bloc['annonces'][0]))}</b>"
+    titre_brut = titre_bloc(bloc["annonces"][0])
+    titre = f"<b>{_esc(titre_brut)}</b>"
     annonces = bloc["annonces"]
     n_max = min(len(annonces), ANNONCES_PAR_REF)
-    while True:
+    while n_max > 0:
         lignes = [titre] + [ligne_annonce(a) for a in annonces[:n_max]]
         reste = len(annonces) - n_max
         if reste > 0:
             lignes.append(f"…et {reste} autres")
         texte = "\n".join(lignes)
-        if len(texte) <= LIMITE_LEGENDE or n_max == 0:
+        if len(texte) <= LIMITE_LEGENDE:
             return texte
         n_max -= 1
+
+    # Plus aucune annonce ne tient à côté du titre. On essaie titre + résumé, puis
+    # titre seul, avant de raccourcir le titre en tout dernier recours.
+    reste = len(annonces)
+    if reste > 0:
+        texte = f"{titre}\n…et {reste} autres"
+        if len(texte) <= LIMITE_LEGENDE:
+            return texte
+    if len(titre) <= LIMITE_LEGENDE:
+        return titre
+    return _titre_html_tronque(titre_brut)
