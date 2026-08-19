@@ -22,6 +22,7 @@ def _db_backend(monkeypatch):
         yield                      # SQLite : comportement historique
         return
     monkeypatch.setattr(config, "DATABASE_URL", url)   # connect() → PostgreSQL
+    import gc
     from backend import dbengine
     conn = db.connect()
     for t in _TABLES:
@@ -29,6 +30,10 @@ def _db_backend(monkeypatch):
     conn.commit()
     conn.close()
     yield
-    # les tests ne ferment pas toujours leurs connexions (sans effet sur SQLite NullPool,
-    # mais épuise le pool PG) → on dispose les pools après chaque test.
+    # Les tests ne ferment pas toujours leurs connexions. Sur SQLite (NullPool)
+    # c'est sans effet, mais sur PG une connexion fuitée reste « idle in
+    # transaction » et bloquerait les DROP TABLE du test suivant (deadlock de
+    # suite). gc.collect() finalise les connexions orphelines (rollback + retour
+    # au pool), puis dispose_all() ferme les pools proprement.
+    gc.collect()
     dbengine.dispose_all()

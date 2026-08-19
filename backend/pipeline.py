@@ -42,34 +42,51 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
     for entry in registry.BOUTIQUES:
         if only and entry["connector"] not in only:
             continue
-        cls = registry.CONNECTORS[entry["connector"]]
-        connector = cls(entry)
-        connector.seen_uids = set(seen)
-        # persiste chaque montre EXAMINÉE (même écartée) → reprise instantanée.
-        # Bufferisé par 50 : un commit par item = des milliers de fsync inutiles.
-        buf = []
-
-        def sink(uid, _buf=buf):
-            _buf.append(uid)
-            if len(_buf) >= 50:
-                db.record_seen(conn, _buf)
-                _buf.clear()
-
-        connector.seen_sink = sink
-        shop_count = 0
+        # ISOLATION PAR BOUTIQUE : un site en panne (WAF, down, structure changée)
+        # ne doit JAMAIS empêcher la collecte des suivantes — avant ce garde-fou,
+        # un simple 403 sur brands_to_scan() tuait le run entier.
         try:
-            for w in connector.collect(mode):
-                fetched += 1
-                shop_count += 1
-                w = enrich(w, targets, rate)
-                if db.upsert_watch(conn, w):
-                    new += 1
-                if shop_count % 20 == 0:
-                    print(f"  ... {entry['boutique']}: {shop_count} fiches retenues",
-                          flush=True)
-        finally:
-            if buf:
-                db.record_seen(conn, buf)   # flush du reliquat même sur interruption
+            cls = registry.CONNECTORS[entry["connector"]]
+            connector = cls(entry)
+            connector.seen_uids = set(seen)
+            # persiste chaque montre EXAMINÉE (même écartée) → reprise instantanée.
+            # Bufferisé par 50 : un commit par item = des milliers de fsync inutiles.
+            buf = []
+
+            def sink(uid, _buf=buf):
+                _buf.append(uid)
+                if len(_buf) >= 50:
+                    db.record_seen(conn, _buf)
+                    _buf.clear()
+
+            connector.seen_sink = sink
+            shop_count = 0
+            try:
+                for w in connector.collect(mode):
+                    fetched += 1
+                    shop_count += 1
+                    w = enrich(w, targets, rate)
+                    if db.upsert_watch(conn, w):
+                        new += 1
+                    if shop_count % 20 == 0:
+                        print(f"  ... {entry['boutique']}: {shop_count} fiches "
+                              "retenues", flush=True)
+            finally:
+                if buf:
+                    try:
+                        db.record_seen(conn, buf)  # flush du reliquat même interrompu
+                    except Exception:
+                        pass   # ne pas MASQUER l'erreur d'origine du connecteur
+        except Exception as e:
+            print(f"  !! {entry['boutique']} en échec "
+                  f"({type(e).__name__}: {e}) — boutique suivante", flush=True)
+            # une erreur DB laisse la transaction PostgreSQL « aborted » : sans
+            # rollback, TOUTES les boutiques suivantes échoueraient en
+            # InFailedSqlTransaction (l'isolation ne servirait à rien)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     try:
         from .notify import notifier_tout
         notifier_tout()   # alertes Discord (no-op sans webhook configuré)

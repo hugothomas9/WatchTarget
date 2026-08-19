@@ -21,6 +21,14 @@ l'affichage via `backend/noms.py` (glossaire familles + couleurs + termes couran
 original conservé en info-bulle. À étendre au fil des cas non couverts.
 
 ## Fait récemment
+- **4 correctifs critiques post-revue (2026-08-19)** — (1) SQL des TTL portable
+  PostgreSQL (`db.iso_ago`, le worker prod re-fonctionne en entier) ; (2) faille
+  d'accès anonyme aux alertes fermée (`LOCAL_ADMIN`, 401/404, cookie Secure,
+  /api/collecte + favoris protégés, adoption des alertes orphelines par l'admin) ;
+  (3) verify GMT via curl_cffi throttlé + bump last_seen sur INCONNU (fin du
+  re-fetch infini, 1144 fiches GMT redeviennent vérifiables) ; (4) pipeline isolé
+  par boutique + rollback transaction. 118 tests verts sur SQLite **et** PostgreSQL
+  (la suite complète tourne désormais sur les 2 moteurs).
 - **Comptes utilisateurs + alertes par personne (étape 2 déploiement, backend)** —
   identité Telegram (Login Widget, signature vérifiée), alertes rattachées à leur
   propriétaire, notifs envoyées au bon utilisateur. Reste le bouton front + /setdomain

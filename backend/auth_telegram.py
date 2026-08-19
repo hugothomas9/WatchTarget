@@ -47,6 +47,11 @@ def creer_session(telegram_id: int) -> str:
 
 def lire_session(cookie: str | None) -> int | None:
     """Renvoie l'id Telegram si le cookie est valide, sinon None."""
+    # sans token configuré, la clé HMAC serait VIDE (calculable par quiconque →
+    # forge de session admin) : on refuse toute session tant que le bot n'est
+    # pas configuré
+    if not config.TELEGRAM_BOT_TOKEN:
+        return None
     if not cookie or "." not in cookie:
         return None
     tid, _, sig = cookie.partition(".")

@@ -39,6 +39,12 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # (ex postgresql://user:pass@host:5432/scrapmontres). Voir docs/specs/deploiement-*.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Mode mono-utilisateur LOCAL (SQLite, pas de domaine → le Login Widget Telegram ne
+# fonctionne pas) : l'accès sans session garde les droits admin sur les alertes.
+# En PROD (DATABASE_URL défini), un visiteur anonyme n'a AUCUN accès aux alertes
+# et /api/collecte est réservé à l'admin (cf. api._scope) — faille corrigée en revue.
+LOCAL_ADMIN = not DATABASE_URL
+
 # --- HTTP (politesse anti-bot) ---
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

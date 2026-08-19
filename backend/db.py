@@ -1,7 +1,7 @@
 """Couche SQLite : schéma watches + favorites, upsert, requêtes."""
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import config
 
@@ -119,6 +119,15 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def iso_ago(days: float) -> str:
+    """Instant « il y a N jours », même format que now_iso(). Tous les timestamps
+    étant stockés en ISO-8601 UTC uniforme, la comparaison de CHAÎNES suffit —
+    et elle est PORTABLE : datetime('now', ?) n'existe qu'en SQLite, pas en
+    PostgreSQL (bug de prod détecté en revue)."""
+    return (datetime.now(timezone.utc)
+            - timedelta(days=days)).isoformat(timespec="seconds")
+
+
 def connect():
     """Connexion portable SQLite (local) ou PostgreSQL (config.DATABASE_URL)."""
     from .dbengine import make_conn
@@ -160,6 +169,13 @@ def init_db(conn):
     ccols = _columns(conn, "cibles")
     if ccols and "telegram_id" not in ccols:   # alertes par utilisateur (étape 2)
         conn.execute("ALTER TABLE cibles ADD COLUMN telegram_id BIGINT")
+    # adoption des alertes « orphelines » (telegram_id NULL, créées en local avant
+    # le multi-utilisateurs) par l'ADMIN : sans ça, en prod elles seraient
+    # invisibles et insupprimables via l'API, mais continueraient de notifier à vie.
+    admin = str(config.TELEGRAM_CHAT_ID or "").strip()
+    if admin.isdigit():
+        conn.execute("UPDATE cibles SET telegram_id=? WHERE telegram_id IS NULL",
+                     (int(admin),))
     conn.commit()
 
 
@@ -362,15 +378,17 @@ def list_cibles(conn, actives_only=False, telegram_id="__all__"):
     return conn.execute(q + " ORDER BY cree_le DESC", args).fetchall()
 
 
-def delete_cible(conn, cible_id: int, telegram_id="__all__") -> None:
+def delete_cible(conn, cible_id: int, telegram_id="__all__") -> bool:
     """Supprime une alerte. Avec `telegram_id`, seulement si elle appartient à cet
-    utilisateur (empêche de supprimer l'alerte d'un autre)."""
+    utilisateur (empêche de supprimer l'alerte d'un autre). Renvoie True si une
+    ligne a réellement été supprimée (False = inexistante ou pas à lui)."""
     if telegram_id != "__all__":
-        conn.execute("DELETE FROM cibles WHERE id=? AND telegram_id=?",
-                     (cible_id, telegram_id))
+        cur = conn.execute("DELETE FROM cibles WHERE id=? AND telegram_id=?",
+                           (cible_id, telegram_id))
     else:
-        conn.execute("DELETE FROM cibles WHERE id=?", (cible_id,))
+        cur = conn.execute("DELETE FROM cibles WHERE id=?", (cible_id,))
     conn.commit()
+    return (cur.rowcount or 0) > 0
 
 
 def get_cibles_matches(conn, telegram_id="__all__"):
@@ -430,8 +448,8 @@ def fresh_wc_refs(conn, max_age_days: int) -> set:
     """Réfs déjà enrichies WatchCharts récemment (à ne pas re-résoudre)."""
     return {r[0] for r in conn.execute(
         "SELECT ref_norm FROM market_prices WHERE wc_fetched_at IS NOT NULL "
-        "AND datetime(wc_fetched_at) > datetime('now', ?)",
-        (f"-{max_age_days} days",))}
+        "AND wc_fetched_at > ?",
+        (iso_ago(max_age_days),))}
 
 
 def upsert_ew_price(conn, ref_norm: str, dial: str, material: str,
@@ -463,11 +481,9 @@ def fresh_ew_keys(conn, max_age_days: int) -> set:
     échecs frais 2 jours seulement (même logique que fresh_market_refs)."""
     rows = conn.execute(
         """SELECT ref_norm, dial, material FROM ew_prices
-           WHERE (ew_median_eur IS NOT NULL
-                  AND datetime(fetched_at) > datetime('now', ?))
-              OR (ew_median_eur IS NULL
-                  AND datetime(fetched_at) > datetime('now', '-2 days'))""",
-        (f"-{max_age_days} days",))
+           WHERE (ew_median_eur IS NOT NULL AND fetched_at > ?)
+              OR (ew_median_eur IS NULL AND fetched_at > ?)""",
+        (iso_ago(max_age_days), iso_ago(2)))
     return {(r[0], r[1], r[2]) for r in rows}
 
 
@@ -477,11 +493,9 @@ def fresh_market_refs(conn, max_age_days: int) -> set:
     doit pas geler une réf pendant un mois)."""
     rows = conn.execute(
         """SELECT ref_norm FROM market_prices
-           WHERE (median_eur IS NOT NULL
-                  AND datetime(fetched_at) > datetime('now', ?))
-              OR (median_eur IS NULL
-                  AND datetime(fetched_at) > datetime('now', '-2 days'))""",
-        (f"-{max_age_days} days",))
+           WHERE (median_eur IS NOT NULL AND fetched_at > ?)
+              OR (median_eur IS NULL AND fetched_at > ?)""",
+        (iso_ago(max_age_days), iso_ago(2)))
     return {r[0] for r in rows}
 
 

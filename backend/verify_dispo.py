@@ -13,6 +13,8 @@ Usage :
 import json
 import re
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -165,6 +167,39 @@ def status_from_html(boutique: str, html: str) -> str | None:
 # autres Shopify dont le .json renvoie None → on les vérifie par la PAGE, ci-dessus).
 _SHOPIFY_JSON = {"CY Watch"}
 
+# Sites derrière un WAF qui rejette l'empreinte TLS de requests : la vérification
+# doit passer par le MÊME transport curl_cffi que le connecteur — sinon 403
+# systématique → fiches jamais revérifiées, vendues qui restent « dispo » à vie
+# (constaté : 1144 fiches GMT bloquées en « indéterminé »).
+_IMPERSONATE = {"GMT"}
+_imp_sessions: dict = {}
+_imp_lock = threading.Lock()
+_imp_last = [0.0]
+
+
+def _imp_get(url: str):
+    """GET via curl_cffi (impersonation Safari), une session par origine, cookies
+    anti-bot semés au premier appel — même recette que backend/connectors/gmt.py.
+    Verrou + cadence 0,5 s : check() tourne sur 6 threads, marteler un site à WAF
+    sans throttle re-déclencherait exactement le blocage qu'on corrige."""
+    from urllib.parse import urlsplit
+    from curl_cffi import requests as cr
+    origin = "{0.scheme}://{0.netloc}".format(urlsplit(url))
+    with _imp_lock:
+        s = _imp_sessions.get(origin)
+        if s is None:
+            s = cr.Session(impersonate="safari17_0")
+            try:
+                s.get(origin + "/", timeout=20)
+            except Exception:
+                pass
+            _imp_sessions[origin] = s
+        wait = _imp_last[0] + 0.5 - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _imp_last[0] = time.monotonic()
+    return s.get(url, timeout=25)
+
 
 def check(boutique: str, url: str) -> str | None:
     """Statut actuel d'une montre sur son site (None = indéterminé, on ne touche pas)."""
@@ -173,6 +208,13 @@ def check(boutique: str, url: str) -> str | None:
             data = http_client.get_json(url.rstrip("/") + ".json")
             var = (data.get("product", {}).get("variants") or [{}])[0]
             return DISPO if var.get("available") else VENDUE
+        if boutique in _IMPERSONATE:
+            r = _imp_get(url)
+            if r.status_code in (404, 410):
+                return RETIREE
+            if r.status_code >= 400:
+                return INCONNU
+            return status_from_html(boutique, r.text)
         enc = {"Jack Road": "cp932", "Housekihiroba": "cp932",
                "BrandBank": "euc-jp"}.get(boutique)
         # Yukizaki : l'URL stockée est en .com (cache cassé) → on vérifie sur .jp
@@ -197,8 +239,10 @@ def run(older_than_days: int | None = 7, boutique: str | None = None) -> dict:
         q += " AND boutique=?"
         args.append(boutique)
     if older_than_days is not None:
-        q += " AND datetime(last_seen) < datetime('now', ?)"
-        args.append(f"-{older_than_days} days")
+        # comparaison de chaînes ISO (portable SQLite/PostgreSQL — datetime('now')
+        # n'existe pas en PG, cf. db.iso_ago)
+        q += " AND last_seen < ?"
+        args.append(db.iso_ago(older_than_days))
     rows = conn.execute(q, args).fetchall()
     print(f"{len(rows)} montre(s) dispo à vérifier", flush=True)
 
@@ -209,6 +253,12 @@ def run(older_than_days: int | None = 7, boutique: str | None = None) -> dict:
         for i, (uid, st) in enumerate(results, 1):
             if st is None:
                 counts["inconnu"] += 1
+                # on avance quand même last_seen : sans ça la fiche resterait
+                # « ancienne » et serait re-téléchargée à CHAQUE passe, pour
+                # toujours (le statut, lui, n'est jamais dégradé sur un doute)
+                conn.execute("UPDATE watches SET last_seen=? WHERE uid=?",
+                             (ts, uid))
+                conn.commit()
             else:
                 counts[st] += 1
                 conn.execute(
