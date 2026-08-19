@@ -178,3 +178,81 @@ def test_legende_bloc_titre_survit_toujours_quand_les_annonces_debordent():
     assert legende.startswith("<b>Rolex Daytona — 126500LN</b>")
     assert "\n<b>" not in legende  # le titre complet est bien la première ligne, intact
     assert len(legende) <= bot_ui.LIMITE_LEGENDE
+
+
+def _cbs(ecran):
+    return [b["callback_data"] for ligne in ecran["keyboard"] for b in ligne]
+
+
+def test_ecran_accueil():
+    e = bot_ui.ecran_accueil(3)
+    assert "WatchTarget" in e["text"]
+    assert "Mes alertes (3)" in str(e["keyboard"])
+    assert "new" in _cbs(e) and "list" in _cbs(e) and "help" in _cbs(e)
+    assert e["photo"] is None
+
+
+def test_ecran_alertes_actives_et_en_pause():
+    e = bot_ui.ecran_alertes([
+        {"id": 1, "libelle": "Ma Daytona", "mots_cles": "rolex daytona",
+         "actif": 1, "nb": 12},
+        {"id": 2, "libelle": "", "mots_cles": "rolex submariner", "actif": 0, "nb": 41},
+    ])
+    libelles = [b["text"] for ligne in e["keyboard"] for b in ligne]
+    assert "🟢 Ma Daytona — 12 montres" in libelles
+    assert "⏸ rolex submariner — 41 montres" in libelles     # libellé vide → mots-clés
+    assert "a:1" in _cbs(e) and "a:2" in _cbs(e)
+
+
+def test_ecran_alertes_vide_invite_a_creer():
+    e = bot_ui.ecran_alertes([])
+    assert "aucune alerte" in e["text"].lower()
+    assert "new" in _cbs(e)
+
+
+def test_ecran_alerte_actions_et_pause():
+    a = {"id": 7, "libelle": "Ma Daytona", "mots_cles": "rolex daytona",
+         "actif": 1, "cree_le": "2026-08-16T10:00:00+00:00"}
+    e = bot_ui.ecran_alerte(a, nb_montres=12, nb_refs=4)
+    assert "Ma Daytona" in e["text"] and "rolex daytona" in e["text"]
+    assert "12 montres" in e["text"] and "4 référence" in e["text"]
+    for cb in ("v:7:1", "a:7:ren", "a:7:kw", "a:7:toggle", "a:7:del", "list"):
+        assert cb in _cbs(e)
+    assert "pause" in str(e["keyboard"]).lower()
+    # alerte en pause → le bouton propose de réactiver
+    e2 = bot_ui.ecran_alerte({**a, "actif": 0}, nb_montres=0, nb_refs=0)
+    assert "réactiver" in str(e2["keyboard"]).lower()
+
+
+def test_ecran_confirm_suppression():
+    e = bot_ui.ecran_confirm_suppression({"id": 7, "libelle": "Ma Daytona",
+                                          "mots_cles": "rolex daytona"})
+    assert "définitive" in e["text"]
+    assert "a:7:del!" in _cbs(e) and "a:7" in _cbs(e)
+
+
+def test_callback_data_toujours_sous_64_octets():
+    ecrans = [
+        bot_ui.ecran_accueil(3),
+        bot_ui.ecran_alertes([{"id": 999999, "libelle": "x" * 80,
+                               "mots_cles": "y" * 80, "actif": 1, "nb": 3}]),
+        bot_ui.ecran_alerte({"id": 999999, "libelle": "x" * 80, "mots_cles": "y" * 80,
+                             "actif": 1, "cree_le": "2026-08-16T10:00:00+00:00"}, 5, 2),
+        bot_ui.ecran_confirm_suppression({"id": 999999, "libelle": "x" * 80,
+                                          "mots_cles": ""}),
+        bot_ui.ecran_aide(),
+    ]
+    for e in ecrans:
+        assert len(e["text"]) <= bot_ui.LIMITE_TEXTE
+        for cb in _cbs(e):
+            assert len(cb.encode()) <= 64, cb
+
+
+def test_ecran_alerte_echappe_le_html():
+    """Un libellé contenant du HTML ne doit pas être interprété par Telegram
+    (parse_mode=HTML) : il est échappé."""
+    e = bot_ui.ecran_alerte({"id": 1, "libelle": "<b>hack</b>", "mots_cles": "a & b",
+                             "actif": 1, "cree_le": ""}, 0, 0)
+    assert "&lt;b&gt;hack&lt;/b&gt;" in e["text"]
+    assert "<b>hack</b>" not in e["text"]
+    assert "a &amp; b" in e["text"]

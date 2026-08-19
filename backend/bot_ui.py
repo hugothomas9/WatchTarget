@@ -155,3 +155,105 @@ def legende_bloc(bloc: dict) -> str:
     if len(titre) <= LIMITE_LEGENDE:
         return titre
     return _titre_html_tronque(titre_brut)
+
+
+# --- Écrans -----------------------------------------------------------------
+# Un écran = {"text", "keyboard", "photo"}. Un bouton = {"text", "callback_data"}.
+# Format des callback_data (≤ 64 octets, cf. tests) :
+#   home | list | new | help | noop
+#   a:<id>            fiche alerte
+#   a:<id>:ren        renommer      a:<id>:kw      changer les mots-clés
+#   a:<id>:toggle     pause/reprise a:<id>:del     demander confirmation
+#   a:<id>:del!       confirmer la suppression
+#   v:<id>:<page>     voir les montres, page 1-indexée
+
+def _b(text: str, cb: str) -> dict:
+    return {"text": text, "callback_data": cb}
+
+
+def _ecran(text: str, keyboard: list, photo=None) -> dict:
+    return {"text": text, "keyboard": keyboard, "photo": photo}
+
+
+def _nom(a: dict) -> str:
+    """Nom affichable d'une alerte : son libellé, à défaut ses mots-clés."""
+    return (a.get("libelle") or "").strip() or (a.get("mots_cles") or "").strip()
+
+
+def ecran_accueil(nb_alertes: int) -> dict:
+    texte = ("👋 <b>WatchTarget</b> — veille montres Japon\n\n"
+             "Crée une alerte, reçois un message dès qu'une montre correspondante "
+             "arrive en boutique.")
+    return _ecran(texte, [
+        [_b("🔔 Créer une alerte", "new")],
+        [_b(f"📋 Mes alertes ({nb_alertes})", "list"), _b("❓ Aide", "help")],
+    ])
+
+
+def ecran_alertes(alertes: list[dict]) -> dict:
+    if not alertes:
+        return _ecran("Tu n'as aucune alerte pour l'instant.",
+                      [[_b("🔔 Créer une alerte", "new")], [_b("◀ Menu", "home")]])
+    clavier = [[_b(f"{'🟢' if a.get('actif') else '⏸'} {_nom(a)} — "
+                   f"{a.get('nb', 0)} montres", f"a:{a['id']}")]
+               for a in alertes]
+    clavier.append([_b("🔔 Créer une alerte", "new"), _b("◀ Menu", "home")])
+    return _ecran("Tes alertes :", clavier)
+
+
+def ecran_alerte(alerte: dict, nb_montres: int, nb_refs: int) -> dict:
+    actif = bool(alerte.get("actif"))
+    jour = (alerte.get("cree_le") or "")[:10]
+    texte = (f"{'🟢' if actif else '⏸'} <b>{_esc(_nom(alerte))}</b>\n"
+             f"Mots-clés : {_esc(alerte.get('mots_cles'))}\n"
+             f"{nb_montres} montres · {nb_refs} référence(s)")
+    if jour:
+        texte += f" · créée le {jour}"
+    if not actif:
+        texte += "\n\n⏸ En pause : plus aucune notification."
+    cid = alerte["id"]
+    return _ecran(texte, [
+        [_b(f"👁 Voir les montres ({nb_montres})", f"v:{cid}:1")],
+        [_b("✏️ Renommer", f"a:{cid}:ren"), _b("🔤 Mots-clés", f"a:{cid}:kw")],
+        [_b("▶️ Réactiver" if not actif else "⏸ Mettre en pause", f"a:{cid}:toggle")],
+        [_b("🗑 Supprimer", f"a:{cid}:del"), _b("◀ Mes alertes", "list")],
+    ])
+
+
+def ecran_confirm_suppression(alerte: dict) -> dict:
+    texte = (f"Supprimer l'alerte « {_esc(_nom(alerte))} » ?\n"
+             "Cette action est définitive.")
+    return _ecran(texte, [[_b("✅ Oui, supprimer", f"a:{alerte['id']}:del!"),
+                           _b("❌ Annuler", f"a:{alerte['id']}")]])
+
+
+def ecran_aide() -> dict:
+    texte = ("<b>Comment ça marche</b>\n\n"
+             "1. « Créer une alerte » puis envoie des mots-clés, par exemple "
+             "<code>rolex daytona 126500LN</code>.\n"
+             "2. Une montre correspond si elle contient <b>tous</b> tes mots-clés — "
+             "marque, modèle (même écrit en japonais) ou référence.\n"
+             "3. Tu reçois un message dès qu'une montre correspondante arrive dans "
+             "une boutique japonaise suivie.\n\n"
+             "« Mes alertes » permet de consulter le stock actuel, mettre en pause "
+             "ou supprimer une alerte.")
+    return _ecran(texte, [[_b("🔔 Créer une alerte", "new")], [_b("◀ Menu", "home")]])
+
+
+def ecran_demande_mots_cles() -> dict:
+    texte = ("Envoie les mots-clés de ton alerte.\n\n"
+             "Exemples :\n<code>rolex daytona</code>\n"
+             "<code>omega speedmaster 3861</code>\n<code>126500LN</code>\n\n"
+             "Une montre doit contenir <b>tous</b> les mots-clés pour correspondre.")
+    return _ecran(texte, [[_b("◀ Annuler", "home")]])
+
+
+def ecran_demande_libelle(alerte: dict) -> dict:
+    return _ecran(f"Envoie le nouveau nom de l'alerte « {_esc(_nom(alerte))} ».",
+                  [[_b("◀ Annuler", f"a:{alerte['id']}")]])
+
+
+def ecran_demande_kw(alerte: dict) -> dict:
+    return _ecran(f"Envoie les nouveaux mots-clés (actuels : "
+                  f"<code>{_esc(alerte.get('mots_cles'))}</code>).",
+                  [[_b("◀ Annuler", f"a:{alerte['id']}")]])
