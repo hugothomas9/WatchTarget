@@ -246,3 +246,37 @@ def test_alerte_reattribuee_a_un_autre_pendant_conversation_puis_message_texte(t
     assert bot.MSG_ACCES in _textes(actions)
     assert db.get_bot_etape(conn, 111) is None      # pas coincé en attente
     assert db.get_cible(conn, cid, telegram_id=222)["mots_cles"] == "rolex daytona"
+
+
+def test_callback_data_identifiant_hors_plage_int64_ne_leve_pas(tmp_path, monkeypatch):
+    """Python autorise les entiers à précision arbitraire : int("999...999") réussit
+    même pour un nombre bien plus grand qu'une clé primaire SQLite/PG (entier signé
+    64 bits). Sans borne explicite, l'exception surgit plus loin, côté driver
+    (OverflowError), au moment de la requête — même vecteur qu'un callback_data
+    malformé, même point d'entrée public, doit être traité pareil : ignoré, sans
+    action ni écriture, base intacte."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    avant = dict(db.get_cible(conn, cid, telegram_id=111))
+    hors_plage = (
+        "99999999999999999999999999",         # 26 chiffres, largement hors plage
+        "-1",                                  # négatif
+        "0",                                   # zéro : pas un id valide (PK >= 1)
+        "9223372036854775808",                 # INT64_MAX + 1, tout juste hors plage
+    )
+    for n in hors_plage:
+        for data in (f"a:{n}", f"a:{n}:toggle", f"v:{n}:1", f"v:{cid}:{n}"):
+            actions = bot.traiter_update(conn, _cb(data), RATE)
+            assert all(a["type"] == "answer" for a in actions), (data, actions)
+            apres = dict(db.get_cible(conn, cid, telegram_id=111))
+            assert apres == avant, data
+
+
+def test_callback_data_bien_forme_visant_l_alerte_d_autrui_reste_refuse(tmp_path, monkeypatch):
+    """Non-régression : la borne ajoutée dans _int_ou_none ne doit pas relâcher
+    l'isolation par utilisateur pour un identifiant parfaitement valide."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    actions = bot.traiter_update(conn, _cb(f"a:{cid}", uid=222), RATE)
+    assert bot.MSG_ACCES in _textes(actions)
+    assert db.get_cible(conn, cid, telegram_id=111) is not None

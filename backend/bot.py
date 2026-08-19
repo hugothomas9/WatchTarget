@@ -30,14 +30,26 @@ def _tronquer(texte: str) -> str:
     return texte[:LONGUEUR_MAX_SAISIE]
 
 
+INT64_MAX = 9223372036854775807   # borne haute d'un entier signé 64 bits (SQLite/PG)
+
+
 def _int_ou_none(s):
-    """int(s) sûr : None si `s` n'est pas un entier — un `callback_data` est une
-    donnée entièrement contrôlée par le client (bot PUBLIC), un fragment forgé ou
-    tronqué (« a:xyz », « v:5:abc », « a: ») ne doit jamais lever d'exception."""
+    """int(s) sûr et BORNÉ : None si `s` n'est pas un entier, ou si c'est un entier
+    hors de la plage plausible pour un identifiant (clé primaire auto-incrémentée)
+    ou un numéro de page — strictement positif, tenant dans un entier signé 64 bits.
+    Un `callback_data` est une donnée entièrement contrôlée par le client (bot
+    PUBLIC) : Python autorise les entiers à précision arbitraire, donc `int(s)` seul
+    ne suffit pas — un « a:99999999999999999999999999 » réussirait le parsing puis
+    ferait lever un OverflowError côté driver SQLite au moment de la requête. La
+    validation de plage doit donc vivre ICI, en un seul endroit, plutôt que dispersée
+    en try/except autour de chaque appel base."""
     try:
-        return int(s)
+        n = int(s)
     except (TypeError, ValueError):
         return None
+    if n <= 0 or n > INT64_MAX:
+        return None
+    return n
 
 
 # --- actions (structures inertes ; l'exécution réseau est plus bas) ---
