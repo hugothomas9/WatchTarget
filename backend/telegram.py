@@ -61,7 +61,10 @@ def _message(w: dict, libelles: list[str], rate: float | None = None) -> str:
         # partout ailleurs dans `bot_ui` où ce champ transite par `_esc`.
         lignes.append("Alerte : " + ", ".join(bot_ui._esc(l) for l in libelles))
     if m.get("url"):
-        lignes.append(m["url"])
+        # Texte brut hors balise, mais le message part en parse_mode=HTML : Telegram
+        # exige `<`, `>` et `&` échappés même hors balise (une query string avec `&`
+        # ferait échouer sendMessage en silence — même défaut que sur le libellé).
+        lignes.append(bot_ui._esc(m["url"]))
     return "\n".join(lignes)
 
 

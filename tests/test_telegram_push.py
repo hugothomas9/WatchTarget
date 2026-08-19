@@ -85,3 +85,14 @@ def test_message_push_lien_non_duplique():
     jamais aussi en href d'un lien inline dans l'annonce."""
     txt = telegram._message(_w(), ["Ma Daytona"], rate=RATE)
     assert txt.count("https://ex/a") == 1
+
+
+def test_message_push_url_echappee_html():
+    """La ligne d'URL nue est du texte hors balise, mais le message part en
+    parse_mode=HTML : Telegram exige `<`, `>` et `&` échappés même hors balise.
+    Une query string avec `&` ferait échouer sendMessage en silence — même
+    défaut que celui corrigé sur le libellé d'alerte (finding revue, round 2)."""
+    url = "https://ex/fiche?id=1&ref=A"
+    txt = telegram._message(_w(url=url), ["Ma Daytona"], rate=RATE)
+    assert "id=1&ref=A" not in txt
+    assert "id=1&amp;ref=A" in txt
