@@ -36,10 +36,11 @@ def envoyer(text: str, chat_id=None) -> bool:
 
 def _message(w: dict, libelles: list[str], rate: float | None = None) -> str:
     """Message d'alerte, MÊME RENDU SOBRE que le bot : titre (marque modèle — réf),
-    l'annonce, l'alerte déclenchée, le lien.
+    l'annonce, l'alerte déclenchée, le lien — quatre lignes distinctes (spec
+    2026-08-17, §9 ; gabarit restauré en revue, round 1).
 
     Aucun prix détaxé, aucune donnée EveryWatch, aucune marge : les notifications
-    partent à des utilisateurs publics (spec 2026-08-17, §9).
+    partent à des utilisateurs publics.
     """
     from . import bot_ui
     if rate is None:
@@ -49,12 +50,18 @@ def _message(w: dict, libelles: list[str], rate: float | None = None) -> str:
     # bot_ui.titre_bloc() renvoie du texte NON échappé (l'échappement se fait au
     # point d'usage) ; le message part en parse_mode=HTML donc un < > ou & dans la
     # marque/le modèle casserait le message ou injecterait du balisage.
+    # Ligne d'annonce SANS lien inline (URL neutralisée) : `bot_ui.ligne_annonce`
+    # omet le « → <a>Voir</a> » quand `url` est vide — on ne touche pas à `bot_ui`,
+    # le lien est ajouté ci-dessous en ligne nue, séparée (plus tappable/copiable).
     lignes = [f"🎯 <b>{bot_ui._esc(bot_ui.titre_bloc(m))}</b>",
-              bot_ui.ligne_annonce(m).lstrip("• ")]
+              bot_ui.ligne_annonce({**m, "url": ""}).lstrip("• ")]
     if libelles:
-        lignes.append("Alerte : " + ", ".join(libelles))
-    # PAS de ligne d'URL séparée : bot_ui.ligne_annonce() se termine déjà par un
-    # lien HTML `→ <a href="...">Voir</a>` — en rajouter une dupliquerait le lien.
+        # `libelles` vient du texte libre saisi par l'utilisateur dans le bot
+        # (`c["libelle"]`/`c["mots_cles"]`) : jamais échappé en amont, comme
+        # partout ailleurs dans `bot_ui` où ce champ transite par `_esc`.
+        lignes.append("Alerte : " + ", ".join(bot_ui._esc(l) for l in libelles))
+    if m.get("url"):
+        lignes.append(m["url"])
     return "\n".join(lignes)
 
 

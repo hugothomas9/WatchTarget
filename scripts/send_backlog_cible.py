@@ -4,11 +4,12 @@ du 429 retry_after). Usage : python -m scripts.send_backlog_cible "<mots_cles>" 
 """
 import sys, time
 import requests
-from backend import db, config, cibles
+from backend import db, config, cibles, fx
 from backend.telegram import _message, _api
 
 def run(mots, libelle):
     conn = db.connect()
+    rate = fx.get_rate()   # une fois pour tout le backlog, pas un appel par message
     # 1) créer l'alerte réelle (persistée pour la prod)
     existing = [c for c in db.list_cibles(conn) if c["mots_cles"] == mots]
     cid = existing[0]["id"] if existing else db.add_cible(conn, mots, libelle)
@@ -20,7 +21,7 @@ def run(mots, libelle):
     print(f"cible id={cid} '{mots}' — {len(matches)} montre(s) à notifier", flush=True)
     sent = 0
     for i, w in enumerate(matches, 1):
-        txt = _message(w, [libelle or mots])
+        txt = _message(w, [libelle or mots], rate=rate)
         for attempt in range(3):
             r = requests.post(_api("sendMessage"),
                               data={"chat_id": config.TELEGRAM_CHAT_ID, "text": txt,
