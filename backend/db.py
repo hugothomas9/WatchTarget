@@ -451,31 +451,53 @@ def update_cible(conn, cible_id: int, mots_cles=None, libelle=None,
     conn.commit()
 
 
+def _watches_matchant(conn, regles):
+    """Boucle de matching partagée : pour chaque montre DISPO, les alertes qu'elle
+    satisfait. Aucune donnée de prix marché n'est chargée ici."""
+    from . import cibles as _cibles
+    conn.row_factory = sqlite3.Row
+    out = []
+    if not regles:
+        return out
+    for w in conn.execute("SELECT * FROM watches WHERE status='dispo'"):
+        blob = _cibles.blob_recherche(dict(w))
+        hits = [c for c in regles if _cibles.matche(c["mots_cles"], blob)]
+        if hits:
+            out.append((w, hits))
+    return out
+
+
 def get_cibles_matches(conn, telegram_id="__all__"):
     """Montres DISPO qui matchent au moins une cible active, enrichies comme les
     opportunités (prix vendu EW + marge). Chaque montre porte `cibles_match` = la
     liste des libellés/mots-clés de cibles qu'elle satisfait. Triée par marge.
-    Avec `telegram_id` : uniquement les alertes de cet utilisateur."""
-    from . import cibles as _cibles
-    conn.row_factory = sqlite3.Row
+    Avec `telegram_id` : uniquement les alertes de cet utilisateur.
+    ⚠️ Vue SITE (enrichie). Le bot Telegram utilise `matches_pour_cible` (brut)."""
     regles = list_cibles(conn, actives_only=True, telegram_id=telegram_id)
-    if not regles:
+    paires = _watches_matchant(conn, regles)
+    if not paires:
         return []
     ew = {(r["ref_norm"], r["dial"], r["material"]): r for r in conn.execute(
         "SELECT * FROM ew_prices WHERE ew_median_eur IS NOT NULL")}
     market = {r["ref_norm"]: r for r in conn.execute(
         "SELECT * FROM market_prices WHERE median_eur IS NOT NULL")}
     out = []
-    for w in conn.execute("SELECT * FROM watches WHERE status='dispo'"):
-        blob = _cibles.blob_recherche(dict(w))
-        hits = [c for c in regles if _cibles.matche(c["mots_cles"], blob)]
-        if not hits:
-            continue
+    for w, hits in paires:
         d = _enrich_watch(w, ew, market)[0]
         d["cibles_match"] = [c["libelle"] or c["mots_cles"] for c in hits]
         out.append(d)
     out.sort(key=lambda d: (d["spread_eur"] is None, -(d["spread_eur"] or 0)))
     return out
+
+
+def matches_pour_cible(conn, cible_id: int) -> list[dict]:
+    """Montres DISPO qui matchent UNE alerte — vue BOT : lignes brutes de `watches`,
+    SANS jointure ew_prices/market_prices ni enrichissement. Une donnée jamais
+    chargée ne peut pas fuiter (voir la spec du bot, §3 et §8)."""
+    cible = get_cible(conn, cible_id)
+    if not cible:
+        return []
+    return [dict(w) for w, _ in _watches_matchant(conn, [cible])]
 
 
 # --- Bot Telegram : état de conversation et méta ---
