@@ -27,6 +27,11 @@ PAUSE_ERREUR = 5           # pause avant de réessayer après une erreur réseau
 LONGUEUR_MAX_SAISIE = 200  # mots-clés/libellé : une saisie utilisateur (jusqu'à 4096
                            # caractères côté Telegram) est tronquée avant stockage,
                            # pour ne pas faire déborder les écrans qui l'affichent.
+MAX_ALERTES_PAR_USER = 20  # bot PUBLIC, boucle mono-thread : sans plafond, un
+                           # utilisateur peut créer des centaines d'alertes puis
+                           # bloquer le bot pour tout le monde en ouvrant « Mes
+                           # alertes » (voir _compter_matches). Même valeur que
+                           # bot_ui.ALERTES_PAR_ECRAN pour rester cohérent.
 
 
 def _tronquer(texte: str) -> str:
@@ -78,11 +83,38 @@ def _accueil(conn, uid, chat_id, message_id=None):
             else _send(chat_id, ecran)]
 
 
+def _compter_matches(conn, cibles) -> dict:
+    """Nombre de montres DISPO par alerte, en UNE SEULE passe sur `watches`.
+
+    NOTE (revue finale, point 3a) : la spec demandait cette fonction dans
+    `backend/db.py` (aux côtés de `_watches_matchant`, qui fait déjà tout le
+    travail de matching en une passe). Au moment de cette correction, `db.py`
+    porte des modifications non commitées d'un autre chantier en cours — pour ne
+    pas les toucher ni les mélanger aux miennes, cette fonction vit ici et
+    s'appuie sur `db._watches_matchant` plutôt que d'être ajoutée à `db.py`.
+    À rapatrier dans `db.py` une fois l'autre chantier committé.
+
+    Avant : un appel à `db.matches_pour_cible` PAR alerte, chacun relisant tout
+    `watches` et recalculant `blob_recherche` pour chaque montre — un utilisateur
+    à 200 alertes bloquait le bot (mono-thread) ~45 s le temps d'ouvrir « Mes
+    alertes ». Après : un seul balayage de `watches`, quel que soit le nombre
+    d'alertes.
+    """
+    cibles = list(cibles)
+    compte = {c["id"]: 0 for c in cibles}
+    for _w, hits in db._watches_matchant(conn, cibles):
+        for c in hits:
+            compte[c["id"]] += 1
+    return compte
+
+
 def _liste_alertes(conn, uid, chat_id, message_id=None):
+    cibles = db.list_cibles(conn, telegram_id=uid)
+    comptes = _compter_matches(conn, cibles)
     alertes = []
-    for c in db.list_cibles(conn, telegram_id=uid):
+    for c in cibles:
         d = dict(c)
-        d["nb"] = len(db.matches_pour_cible(conn, d["id"]))
+        d["nb"] = comptes.get(d["id"], 0)
         alertes.append(d)
     ecran = bot_ui.ecran_alertes(alertes)
     return [_edit(chat_id, message_id, ecran) if message_id
@@ -136,6 +168,9 @@ def _traiter_texte(conn, uid, chat_id, texte):
     if etape == "attente_mots_cles":
         if not valeur:
             return [_send(chat_id, bot_ui.ecran_demande_mots_cles())]
+        if len(db.list_cibles(conn, telegram_id=uid)) >= MAX_ALERTES_PAR_USER:
+            db.clear_bot_etape(conn, uid)
+            return [_send(chat_id, bot_ui.ecran_max_alertes(MAX_ALERTES_PAR_USER))]
         cid = db.add_cible(conn, _tronquer(valeur), "", telegram_id=uid)
         db.clear_bot_etape(conn, uid)
         return _fiche_alerte(conn, uid, chat_id, cid)
@@ -215,8 +250,16 @@ def traiter_update(conn, update: dict, rate: float) -> list[dict]:
         return []
     expediteur = src.get("from") or {}
     uid = expediteur.get("id")
-    chat_id = ((cb.get("message", {}) if cb else msg).get("chat", {}) or {}).get("id")
+    chat = (cb.get("message", {}) if cb else msg).get("chat", {}) or {}
+    chat_id = chat.get("id")
     if uid is None or chat_id is None:
+        return []
+    # RÈGLE DURE : le bot est PUBLIC. Un /start ou un callback_query en groupe est
+    # livré au bot quel que soit le privacy mode ; sans ce filtre, le menu et les
+    # écrans d'alerte (édités DANS le groupe) exposeraient les données privées de
+    # qui appuie sur un bouton (uid du clic ≠ chat où éditer) à tout le groupe —
+    # voir revue finale, point 1. On ignore silencieusement, sans toucher la base.
+    if chat.get("type") != "private":
         return []
     db.upsert_user(conn, uid, expediteur.get("first_name", "") or "",
                    expediteur.get("username", "") or "")
@@ -286,6 +329,16 @@ def executer(action: dict) -> bool:
         data["reply_markup"] = markup
     try:
         r = requests.post(_api(methode), data=data, timeout=30)
+        if r.status_code == 429:
+            # Même convention que scripts/send_backlog_cible.py : Telegram limite
+            # à ~1 message/s par chat, et « Voir les montres » en envoie 5
+            # d'affilée. Sans repli, un 429 laissait la page affichée à moitié,
+            # sans que l'utilisateur sache qu'il manque quelque chose (revue
+            # finale, point 4). Un seul réessai : le bot est mono-thread, on ne
+            # bloque pas tout le monde derrière un chat en particulier.
+            wait = r.json().get("parameters", {}).get("retry_after", 3)
+            time.sleep(wait + 1)
+            r = requests.post(_api(methode), data=data, timeout=30)
         ok = bool(r.ok and r.json().get("ok"))
         if not ok:
             print(f"[bot] envoi KO ({typ}) : réponse non ok", flush=True)
@@ -344,7 +397,16 @@ def boucle(conn, rate_getter, transport, max_tours=None) -> int:
             offset = max(offset or 0, up.get("update_id", 0) + 1)
             try:
                 for action in traiter_update(conn, up, rate):
-                    transport.envoyer(action)
+                    ok = transport.envoyer(action)
+                    if not ok and action.get("type") == "edit":
+                        # Telegram refuse d'éditer un message vieux de plus de 48 h
+                        # (400) : sans repli, l'écran a juste l'air cassé (le
+                        # spinner s'éteint, rien ne s'affiche) — on rejoue la même
+                        # charge en nouveau message (revue finale, point 2).
+                        transport.envoyer({"type": "send",
+                                          "chat_id": action["chat_id"],
+                                          "text": action["text"],
+                                          "keyboard": action["keyboard"]})
                 traites += 1
             except Exception as e:
                 print(f"[bot] update {up.get('update_id')} ignoré : {_masquer(e)}",

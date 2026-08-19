@@ -47,6 +47,22 @@ def test_preparer_montres_ne_retombe_jamais_sur_le_detaxe():
     assert "26 000" not in bot_ui.ligne_annonce(m)
 
 
+CHAMPS_ATTENDUS = {"uid", "marque", "modele", "reference", "etat", "boutique",
+                   "url", "image", "prix_eur"}
+
+
+def test_preparer_montres_champs_exactement_les_neuf_attendus():
+    """Barrière la plus solide contre une fuite : `preparer_montres` reconstruit une
+    LISTE BLANCHE (pas un filtre par nom interdit). On vérifie une ÉGALITÉ d'ensembles
+    — pas une soustraction — pour qu'une future clé ajoutée par mégarde à la liste
+    blanche soit attrapée, même si elle n'est pas dans CHAMPS_INTERDITS (revue finale,
+    point 6)."""
+    m = bot_ui.preparer_montres(
+        [w(prix_detaxe_eur=26000.0, ew_median_eur=27400.0, spread_eur=8100.0,
+           benef_min=700.0)], RATE)[0]
+    assert set(m.keys()) == CHAMPS_ATTENDUS
+
+
 def test_preparer_montres_supprime_les_champs_interdits():
     m = bot_ui.preparer_montres(
         [w(prix_detaxe_eur=26000.0, ew_median_eur=27400.0, spread_eur=8100.0,

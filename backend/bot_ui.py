@@ -4,19 +4,33 @@ Tout ce qui s'affiche dans le bot est construit ici, à partir de données déj�
 C'est ce qui rend le bot testable sans réseau (cf. `verify_dispo.status_from_html`).
 
 RÈGLE DURE (spec 2026-08-17) : le bot est PUBLIC. Aucun prix détaxé, aucune donnée
-EveryWatch, aucune marge — `preparer_montres` supprime ces champs à l'entrée et
-`tests/test_bot_ui.py` interdit leur réapparition en sortie.
+EveryWatch, aucune marge. La protection n'est PAS un filtre par nom de champ à
+l'entrée : `preparer_montres` reconstruit une LISTE BLANCHE de 9 champs autorisés
+en sortie, quels que soient les champs présents en entrée — une donnée qui ne fait
+pas partie de ces 9 champs ne peut donc pas fuiter, y compris une future donnée
+interdite jamais anticipée. `CHAMPS_INTERDITS` ci-dessous ne sert qu'aux TESTS
+(vérifier qu'aucun de ces noms ne ressort) ; `preparer_montres` ne la lit jamais.
+`tests/test_bot_ui.py` interdit toute réapparition de ces champs en sortie.
 """
 import html
 import json
 
-LIMITE_LEGENDE = 1024      # légende d'une photo Telegram
+LIMITE_LEGENDE = 1000      # Telegram plafonne une légende de photo à 1024, mais en
+                           # unités UTF-16 — alors que ce module compte des
+                           # caractères Python (`len(str)`). Les deux comptages
+                           # divergent sur tout caractère hors du plan de base
+                           # (emoji, certains kanji rares) : un dépassement fait
+                           # échouer `sendPhoto` en 400, bloc perdu SANS repli.
+                           # Plutôt que d'implémenter un comptage UTF-16, on prend
+                           # une marge de 24 caractères (revue finale, point 7).
 LIMITE_TEXTE = 4096        # message texte Telegram
 REFS_PAR_PAGE = 3          # blocs (= photos) par page
 ANNONCES_PAR_REF = 8       # annonces listées par référence, puis « …et N autres »
 ALERTES_PAR_ECRAN = 20     # boutons d'alerte max sur l'écran « Mes alertes »
 
-# Champs qui ne doivent JAMAIS sortir du bot (edge d'arbitrage privé).
+# Champs qui ne doivent JAMAIS sortir du bot (edge d'arbitrage privé). Utilisé
+# UNIQUEMENT par les tests — voir le docstring du module ci-dessus : la vraie
+# protection est la liste blanche de `preparer_montres`, pas ces noms.
 CHAMPS_INTERDITS = ("prix_detaxe_eur", "prix_detaxe_jpy", "prix_ht",
                     "ew_median_eur", "ew_p25_eur", "ew_p75_eur", "ew_n_sales",
                     "spread_eur", "spread_p25_eur", "net_eur",
@@ -129,8 +143,9 @@ def legende_bloc(bloc: dict) -> str:
     dépasse LIMITE_LEGENDE on retire des annonces une par une — LE TITRE RESTE
     TOUJOURS PRIORITAIRE. Si même le titre seul (une fois entouré de <b></b> et
     échappé) dépasse LIMITE_LEGENDE, on le raccourcit en dernier recours : la spec
-    exige à la fois « titre jamais sacrifié aux annonces » ET « légende <= 1024 » —
-    un titre écourté vaut mieux qu'une légende invalide que Telegram refusera.
+    exige à la fois « titre jamais sacrifié aux annonces » ET « légende <=
+    LIMITE_LEGENDE » — un titre écourté vaut mieux qu'une légende invalide que
+    Telegram refusera.
     """
     titre_brut = titre_bloc(bloc["annonces"][0])
     titre = f"<b>{_esc(titre_brut)}</b>"
@@ -266,6 +281,12 @@ def ecran_demande_kw(alerte: dict) -> dict:
     return _ecran(f"Envoie les nouveaux mots-clés (actuels : "
                   f"<code>{_esc(alerte.get('mots_cles'))}</code>).",
                   [[_b("◀ Annuler", f"a:{alerte['id']}")]])
+
+
+def ecran_max_alertes(max_alertes: int) -> dict:
+    texte = (f"Tu as atteint la limite de {max_alertes} alertes.\n"
+             "Supprime-en une avant d'en créer une nouvelle.")
+    return _ecran(texte, [[_b("📋 Mes alertes", "list")], [_b("◀ Menu", "home")]])
 
 
 def ecran_alerte_vide(alerte: dict) -> dict:

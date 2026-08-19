@@ -65,6 +65,10 @@ Même image Docker que `web` et `worker`, commande surchargée :
 - Chez @BotFather : `/setcommands` →
       start - Menu principal
       aide - Comment ça marche
+- Chez @BotFather : `/setjoingroups` → **Disable**. Le bot est PUBLIC et affiche des
+  données privées par utilisateur (alertes, stock) dans le chat où on lui parle ;
+  l'empêcher de rejoindre des groupes évite qu'un écran destiné à une personne
+  s'affiche pour tout un groupe.
 - Vérification après déploiement : envoyer `/start` au bot → le menu doit s'afficher.
 
 ---

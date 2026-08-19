@@ -12,17 +12,18 @@ def _conn(tmp_path, monkeypatch):
     return conn
 
 
-def _msg(texte, uid=111, chat=111):
+def _msg(texte, uid=111, chat=111, chat_type="private"):
     return {"update_id": 1,
-            "message": {"message_id": 10, "chat": {"id": chat},
+            "message": {"message_id": 10, "chat": {"id": chat, "type": chat_type},
                         "from": {"id": uid, "first_name": "Alice"}, "text": texte}}
 
 
-def _cb(data, uid=111, chat=111):
+def _cb(data, uid=111, chat=111, chat_type="private"):
     return {"update_id": 2,
             "callback_query": {"id": "cb1", "data": data,
                                "from": {"id": uid, "first_name": "Alice"},
-                               "message": {"message_id": 10, "chat": {"id": chat}}}}
+                               "message": {"message_id": 10,
+                                          "chat": {"id": chat, "type": chat_type}}}}
 
 
 def _types(actions):
@@ -280,3 +281,91 @@ def test_callback_data_bien_forme_visant_l_alerte_d_autrui_reste_refuse(tmp_path
     actions = bot.traiter_update(conn, _cb(f"a:{cid}", uid=222), RATE)
     assert bot.MSG_ACCES in _textes(actions)
     assert db.get_cible(conn, cid, telegram_id=111) is not None
+
+
+def test_message_dans_un_groupe_est_ignore(tmp_path, monkeypatch):
+    """Le bot est PUBLIC : ajouté à un groupe, un simple message (ex. /start, livré
+    même en privacy mode) ne doit produire AUCUNE action ni toucher la base — sinon
+    le menu s'affiche dans le groupe pour tout le monde (revue finale, point 1)."""
+    conn = _conn(tmp_path, monkeypatch)
+    actions = bot.traiter_update(conn, _msg("/start", chat_type="group"), RATE)
+    assert actions == []
+    assert db.get_user(conn, 111) is None
+
+
+def test_callback_dans_un_groupe_est_ignore(tmp_path, monkeypatch):
+    """Un callback_query venant d'un groupe (livré quel que soit le privacy mode)
+    ne doit produire AUCUNE action : sinon le bot édite le message DANS le groupe
+    avec les données privées de l'utilisateur qui a cliqué (alertes, stock…)."""
+    conn = _conn(tmp_path, monkeypatch)
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    actions = bot.traiter_update(conn, _cb("list", chat_type="group"), RATE)
+    assert actions == []
+    actions = bot.traiter_update(conn, _cb(f"a:{cid}", chat_type="supergroup"), RATE)
+    assert actions == []
+
+
+def test_compter_matches_une_seule_passe_selectivites_variees(tmp_path, monkeypatch):
+    """`_compter_matches` doit compter, EN UNE SEULE passe sur `watches`, le nombre
+    de montres par alerte — pour plusieurs alertes de sélectivité différente, dont
+    une sans aucune correspondance (revue finale, point 3a)."""
+    conn = _conn(tmp_path, monkeypatch)
+    for i in range(3):
+        db.upsert_watch(conn, {
+            "uid": f"jackroad:126500LN:{i}", "boutique": "jackroad",
+            "reference": "126500LN", "marque": "Rolex", "modele": "Daytona",
+            "url": f"https://ex/{i}", "prix_ttc": 3210000, "etat": "中古A"})
+    db.upsert_watch(conn, {
+        "uid": "cywatch:311.30:z", "boutique": "cywatch",
+        "reference": "311.30.42", "marque": "Omega", "modele": "Speedmaster",
+        "url": "https://ex/z", "prix_ttc": 900000, "etat": "中古A"})
+    large = db.add_cible(conn, "rolex", "Toutes les Rolex", telegram_id=111)
+    precise = db.add_cible(conn, "rolex daytona 126500LN", "Daytona précise",
+                           telegram_id=111)
+    aucune = db.add_cible(conn, "patek nautilus", "Introuvable", telegram_id=111)
+
+    cibles = db.list_cibles(conn, telegram_id=111)
+    comptes = bot._compter_matches(conn, cibles)
+    assert comptes[large] == 3
+    assert comptes[precise] == 3
+    assert comptes[aucune] == 0
+
+
+def test_liste_alertes_affiche_les_bons_comptes(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    db.upsert_watch(conn, {
+        "uid": "jackroad:126500LN:a", "boutique": "jackroad",
+        "reference": "126500LN", "marque": "Rolex", "modele": "Daytona",
+        "url": "https://ex/a", "prix_ttc": 3210000, "etat": "中古A"})
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    vide = db.add_cible(conn, "patek nautilus", "Vide", telegram_id=111)
+    actions = bot.traiter_update(conn, _cb("list"), RATE)
+    dump = str(actions)
+    assert "1 montres" in dump
+    assert "0 montres" in dump
+
+
+def test_creation_alerte_refusee_au_dela_du_plafond(tmp_path, monkeypatch):
+    """Le bot est PUBLIC : sans plafond, un utilisateur peut créer 200 alertes puis
+    ouvrir « Mes alertes » et bloquer le bot (mono-thread) pour tout le monde
+    (revue finale, point 3b). Au-delà de `MAX_ALERTES_PAR_USER`, la création est
+    refusée avec un message clair, pas d'exception ni de création silencieuse."""
+    conn = _conn(tmp_path, monkeypatch)
+    for i in range(bot.MAX_ALERTES_PAR_USER):
+        db.add_cible(conn, f"mots {i}", f"Alerte {i}", telegram_id=111)
+    assert len(db.list_cibles(conn, telegram_id=111)) == bot.MAX_ALERTES_PAR_USER
+
+    bot.traiter_update(conn, _cb("new"), RATE)
+    actions = bot.traiter_update(conn, _msg("rolex daytona"), RATE)
+
+    assert len(db.list_cibles(conn, telegram_id=111)) == bot.MAX_ALERTES_PAR_USER
+    assert str(bot.MAX_ALERTES_PAR_USER) in _textes(actions)
+    assert db.get_bot_etape(conn, 111) is None      # conversation refermée, pas coincé
+
+
+def test_message_dans_un_chat_prive_continue_de_fonctionner(tmp_path, monkeypatch):
+    """Non-régression : le filtre groupe ne doit pas casser le cas normal."""
+    conn = _conn(tmp_path, monkeypatch)
+    actions = bot.traiter_update(conn, _msg("/start", chat_type="private"), RATE)
+    assert "WatchTarget" in _textes(actions)
+    assert db.get_user(conn, 111) is not None

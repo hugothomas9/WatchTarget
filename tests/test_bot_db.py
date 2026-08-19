@@ -100,7 +100,7 @@ def test_matches_pour_cible_sans_enrichissement(tmp_path, monkeypatch):
                         "ew_matched_by": "agregat", "ew_variant": ""})
     cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
     w = db.matches_pour_cible(conn, cid)[0]
-    for interdit in ("ew_median_eur", "ew_n_sales", "spread_eur", "net_eur"):
+    for interdit in ("ew_median_eur", "ew_n_sales", "spread_eur", "marge_nette_eur"):
         assert interdit not in w
     # le champ brut prix_ttc, lui, est bien là (c'est le prix affiché)
     assert w["prix_ttc"] == 3210000

@@ -28,7 +28,7 @@ class FauxTransport:
 
 def _msg(update_id, texte, uid=111):
     return {"update_id": update_id,
-            "message": {"message_id": 10, "chat": {"id": uid},
+            "message": {"message_id": 10, "chat": {"id": uid, "type": "private"},
                         "from": {"id": uid, "first_name": "Alice"}, "text": texte}}
 
 
@@ -65,7 +65,7 @@ def test_boucle_survit_a_un_update_qui_plante(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(bot.db, "upsert_user", upsert_qui_plante)
 
-    casse = {"update_id": 200, "message": {"chat": {"id": 111},
+    casse = {"update_id": 200, "message": {"chat": {"id": 111, "type": "private"},
                                            "from": {"id": 111}, "text": "/start"}}
     t = FauxTransport([[casse, _msg(201, "/start")]])
     n = bot.boucle(conn, lambda: 0.006, t, max_tours=1)
@@ -109,6 +109,39 @@ def test_boucle_persiste_l_offset_apres_chaque_update(tmp_path, monkeypatch):
     assert db.get_bot_meta(conn, "offset") == "303"
 
 
+def test_boucle_rejoue_en_send_quand_un_edit_echoue(tmp_path, monkeypatch):
+    """Telegram refuse d'éditer un message vieux de plus de 48 h (400). `executer`
+    renvoie False mais personne ne le lisait : la navigation avait alors juste l'air
+    cassée (le spinner s'éteint, rien ne s'affiche). `boucle` doit rejouer la même
+    charge en `send` (nouveau message) quand un `edit` échoue — revue finale, point 2.
+    """
+    conn = _conn(tmp_path, monkeypatch)
+
+    class TransportEditRefuse(FauxTransport):
+        def envoyer(self, action):
+            self.envoyes.append(action)
+            return action.get("type") != "edit"     # tous les edit échouent
+
+    # « list » depuis un vieux message → l'action produite est un edit
+    cid = db.add_cible(conn, "rolex daytona", "Ma Daytona", telegram_id=111)
+    cb = {"update_id": 400,
+          "callback_query": {"id": "cb1", "data": "list",
+                             "from": {"id": 111, "first_name": "Alice"},
+                             "message": {"message_id": 10,
+                                        "chat": {"id": 111, "type": "private"}}}}
+    t = TransportEditRefuse([[cb]])
+    bot.boucle(conn, lambda: 0.006, t, max_tours=1)
+
+    edits = [a for a in t.envoyes if a["type"] == "edit"]
+    sends_repli = [a for a in t.envoyes if a["type"] == "send"]
+    assert len(edits) == 1
+    assert len(sends_repli) == 1
+    # même texte et même clavier, en nouveau message
+    assert sends_repli[0]["text"] == edits[0]["text"]
+    assert sends_repli[0]["keyboard"] == edits[0]["keyboard"]
+    assert sends_repli[0]["chat_id"] == edits[0]["chat_id"]
+
+
 def test_boucle_masque_le_token_dans_les_logs_reseau(tmp_path, monkeypatch, capsys):
     """Une exception réseau (ex. `requests.RequestException`) se stringifie
     généralement AVEC l'URL complète, donc avec le token en clair : il ne doit
@@ -142,6 +175,7 @@ def test_executer_construit_les_bons_appels(monkeypatch):
 
         class R:
             ok = True
+            status_code = 200
 
             @staticmethod
             def json():
@@ -160,6 +194,45 @@ def test_executer_construit_les_bons_appels(monkeypatch):
                                       "answerCallbackQuery"]
     # le clavier part en JSON sous reply_markup
     assert "callback_data" in appels[2][1]["reply_markup"]
+
+
+def test_executer_reessaie_une_fois_apres_un_429(monkeypatch):
+    """« Voir les montres » envoie 5 messages d'affilée sur un chat limité à ~1
+    msg/s : en 429, `scripts/send_backlog_cible.py` lit `parameters.retry_after`,
+    attend, et réessaie — `executer` doit suivre la MÊME convention plutôt que
+    d'abandonner en laissant la page affichée à moitié (revue finale, point 4)."""
+    appels = []
+    attentes = []
+
+    class R429:
+        ok = False
+        status_code = 429
+
+        @staticmethod
+        def json():
+            return {"ok": False, "parameters": {"retry_after": 2}}
+
+    class ROk:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    def faux_post(url, data=None, timeout=None):
+        appels.append(data)
+        return R429() if len(appels) == 1 else ROk()
+
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "123:TEST")
+    monkeypatch.setattr(bot.requests, "post", faux_post)
+    monkeypatch.setattr(bot.time, "sleep", lambda s: attentes.append(s))
+
+    ok = bot.executer({"type": "send", "chat_id": 1, "text": "hello", "keyboard": []})
+
+    assert ok is True
+    assert len(appels) == 2                # un envoi raté, un réessai
+    assert attentes and attentes[0] >= 2    # a bien attendu retry_after
 
 
 def test_executer_journalise_l_echec_reseau_sans_fuite_de_token(monkeypatch, capsys):

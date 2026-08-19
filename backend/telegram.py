@@ -17,9 +17,21 @@ def _api(method: str) -> str:
     return f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/{method}"
 
 
-def envoyer(text: str, chat_id=None) -> bool:
+BLOQUE = "bloque"   # sentinel renvoyé par `envoyer` sur un 403 (le destinataire a
+                    # bloqué le bot) : échec DÉFINITIF, à distinguer de False (échec
+                    # transitoire — réseau, 429, config absente — qu'il faut retenter
+                    # au run suivant). BLOQUE est truthy comme True : les appelants
+                    # existants qui font `if envoyer(...):` sans se soucier du cas
+                    # bloqué continuent de fonctionner sans changement.
+
+
+def envoyer(text: str, chat_id=None):
     """Envoie un message. `chat_id` = destinataire (défaut : chat admin configuré).
-    False si non configuré ou échec."""
+    Renvoie True si envoyé, False si échec transitoire (config manquante, réseau,
+    erreur API hors 403), ou `BLOQUE` si Telegram répond 403 — le destinataire a
+    bloqué le bot, un échec définitif qu'il ne faut jamais retenter (voir
+    `notifier_cibles`, qui distingue les deux pour ne pas boucler indéfiniment sur
+    un utilisateur public qui a bloqué le bot)."""
     chat_id = chat_id or config.TELEGRAM_CHAT_ID
     if not (config.TELEGRAM_BOT_TOKEN and chat_id):
         return False
@@ -29,7 +41,9 @@ def envoyer(text: str, chat_id=None) -> bool:
                                 "parse_mode": "HTML",
                                 "disable_web_page_preview": "false"},
                           timeout=15)
-        return r.ok and r.json().get("ok", False)
+        if r.status_code == 403:
+            return BLOQUE
+        return bool(r.ok and r.json().get("ok", False))
     except requests.RequestException:
         return False
 
@@ -98,10 +112,16 @@ def notifier_cibles(conn=None) -> int:
             for c in cibles_ok:
                 typ = f"cible:{c['id']}"
                 dest = c["telegram_id"] if "telegram_id" in c.keys() else None
-                if envoyer(_message(w, [c["libelle"] or c["mots_cles"]], rate=rate),
-                           chat_id=dest):
+                resultat = envoyer(
+                    _message(w, [c["libelle"] or c["mots_cles"]], rate=rate),
+                    chat_id=dest)
+                if resultat:
+                    # BLOQUE (403, définitif) est aussi marqué « notifié » pour ne
+                    # pas retenter indéfiniment — mais pas compté comme un VRAI
+                    # envoi (revue finale, point 5).
                     _marquer(conn, w["uid"], typ)
-                    n += 1
+                    if resultat is True:
+                        n += 1
     if close:
         conn.close()
     return n
