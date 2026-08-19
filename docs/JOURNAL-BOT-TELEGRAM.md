@@ -4,8 +4,9 @@
 > l'autre : décisions prises (et pourquoi), craintes/pièges connus, ce qui est fait,
 > ce qui reste. À relire en début de session et à mettre à jour à chaque étape.
 >
-> Dernière mise à jour : **2026-08-17**
-> Statut global : **spec validée + plan écrit — prêt à coder, aucun code écrit**
+> Dernière mise à jour : **2026-08-19**
+> Statut global : **implémenté, 203 tests verts** — reste : ligne de roadmap (laissée
+> à Hugo, voir §8) et test manuel avec un vrai bot Telegram.
 > Spec : `docs/specs/2026-08-17-bot-telegram-interactif.md`
 > Plan : `docs/superpowers/plans/2026-08-17-bot-telegram-interactif.md`
 
@@ -148,8 +149,15 @@ une seule alerte.
 - [x] Plan d'implémentation écrit : `docs/superpowers/plans/2026-08-17-bot-telegram-interactif.md`
       (10 tâches TDD ; les plans du projet vivent dans `docs/superpowers/plans/`,
       les specs dans `docs/specs/`)
-- [ ] Implémentation (TDD)
-- [ ] Déploiement du service `bot`
+- [x] Implémentation (TDD) — 203 tests verts (`python -m pytest -q`)
+- [x] Déploiement du service `bot` — documenté dans `README-DEPLOY.md`
+      (commande, always-on, une seule instance, variables, `/setcommands`)
+- [ ] Ligne « Fait récemment » dans `docs/ROADMAP.md` — **laissée à Hugo** : le
+      fichier porte des modifications non commitées d'un autre chantier au moment
+      de cette tâche, on ne voulait pas les embarquer dans ce commit.
+- [ ] Test manuel avec un vrai bot Telegram (nécessite un token réel) — à faire
+      par Hugo : `/start`, créer une alerte, voir les montres, pagination,
+      pause, suppression (voir Step 5 du brief de la tâche 10).
 
 ---
 
@@ -218,3 +226,63 @@ chaque bloc et de chaque notification (« si on a plusieurs alertes on sait dire
 laquelle »). Devenu une règle dure : cette ligne de titre n'est jamais sacrifiée à la
 troncature, ce sont les annonces qui sont coupées. Le nom de l'alerte figure dans
 l'en-tête de page et dans le push.
+
+### 2026-08-19 — Implémentation terminée, déploiement et documentation
+
+Les 10 tâches du plan sont livrées. Le bot se lance par `python -m backend.bot`
+(long polling) ; deux modules : `backend/bot_ui.py` (rendu pur, zéro réseau/DB) et
+`backend/bot.py` (décision `traiter_update` + exécution `executer`/`boucle`/
+`Transport`/`main`).
+
+**Écrans livrés** : accueil, mes alertes, fiche alerte, confirmation de suppression,
+aide, demande de mots-clés, demande de libellé, demande de nouveaux mots-clés, alerte
+vide, pagination des montres.
+
+**Actions sur une alerte** : voir les montres, renommer, changer les mots-clés,
+mettre en pause / réactiver, supprimer avec confirmation.
+
+**Garde-fous ajoutés en cours de route** (au-delà de la spec initiale) :
+- plafond d'affichage à 20 alertes (`ALERTES_PAR_ECRAN`) ;
+- saisie utilisateur tronquée à 200 caractères (`LONGUEUR_MAX_SAISIE`) ;
+- identifiants de `callback_data` validés et bornés à un entier 64 bits
+  (`_int_ou_none`) — un `callback_data` malformé ou hors bornes ne peut pas planter
+  le dispatch ;
+- token Telegram masqué dans tous les logs (`_masquer`) ;
+- offset `getUpdates` persisté après **chaque** update (pas juste en fin de batch)
+  pour éviter tout rejeu après un crash en plein traitement ;
+- légende de photo garantie ≤ 1024 caractères avec priorité donnée au titre (règle
+  dure du §4-4 respectée même en cas de contenu long).
+
+**Alignement du push** (Task 9) : `backend/telegram.py::_message` a été réécrit pour
+coller au rendu sobre du bot — plus aucun prix détaxé, prix EveryWatch ni marge,
+format à 4 lignes (titre / annonce / alerte / lien), tous les champs échappés en
+HTML. Cohérent avec la règle dure du §3 : l'edge d'arbitrage ne fuit ni par
+l'affichage ni par la notification.
+
+**Vérification finale** : `python -m pytest -q` → **203 tests passés**. Sous-suite
+bot (`test_bot_ui.py`, `test_bot_dispatch.py`, `test_bot_runtime.py`,
+`test_bot_db.py`, `test_telegram_push.py`) → **79 tests passés**.
+
+**Déploiement et config** : troisième service documenté dans `README-DEPLOY.md`
+(même image Docker, commande `python -m backend.bot`, always-on, une seule instance,
+variables `TELEGRAM_BOT_TOKEN`/`DATABASE_URL`, `/setcommands`, vérif post-déploiement
+via `/start`). `.env.example` complété avec `TELEGRAM_BOT_TOKEN_DEV` et sa note sur le
+conflit de polling à deux tokens.
+
+**Écarts par rapport au brief de cette tâche** : la mise à jour de
+`docs/ROADMAP.md` (Step 3) n'a **pas** été faite dans ce commit — le fichier portait
+au moment de cette tâche des modifications non commitées appartenant à un autre
+chantier (`backend/api.py`, `backend/db.py`, `backend/pipeline.py`,
+`frontend/src/App.jsx`, `tests/conftest.py` étaient aussi modifiés, plus des fichiers
+de tests non suivis), et les embarquer aurait mélangé deux chantiers dans un même
+commit. La ligne « Fait récemment » reste à ajouter par Hugo, texte prêt dans le
+brief de la tâche 10.
+
+**Reste à faire** :
+1. Ajouter la ligne « Bot Telegram interactif » à `docs/ROADMAP.md` (texte fourni
+   dans le brief de la tâche 10).
+2. Test manuel avec un vrai bot de dev (`TELEGRAM_BOT_TOKEN_DEV`) : `/start` → menu ;
+   créer une alerte ; voir les montres → pagination ; pause ; suppression avec
+   confirmation. Nécessite un token réel, non fait dans cette session.
+3. (Optionnel, recommandé avant mise en ligne) Rejouer la suite avec PostgreSQL :
+   `TEST_DATABASE_URL=postgresql://user@localhost:5432/scrapmontres python -m pytest -q`.

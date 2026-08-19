@@ -53,6 +53,20 @@ Dans le projet Railway → *New* → *Empty Service* (ou duplique le repo) :
 - Onglet *Settings* → *Cron Schedule* : `0 3 * * *` (tous les jours 3 h) ou
   `0 3,15 * * *` (2×/jour). Railway lance alors `backend.worker` à l'heure dite.
 
+## Service `bot` (bot Telegram interactif)
+
+Même image Docker que `web` et `worker`, commande surchargée :
+
+    python -m backend.bot
+
+- **Doit être always-on** (long polling) — pas d'instance qui s'endort.
+- **Exactement une instance** : deux pollers sur le même token = erreur 409.
+- Variables nécessaires : `TELEGRAM_BOT_TOKEN`, `DATABASE_URL`.
+- Chez @BotFather : `/setcommands` →
+      start - Menu principal
+      aide - Comment ça marche
+- Vérification après déploiement : envoyer `/start` au bot → le menu doit s'afficher.
+
 ---
 
 ## Vérifier
