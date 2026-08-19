@@ -237,6 +237,20 @@ def traiter_update(conn, update: dict, rate: float) -> list[dict]:
 
 
 # --- exécution réseau -------------------------------------------------------
+def _masquer(texte) -> str:
+    """Masque le token Telegram dans un texte destiné aux logs. `telegram._api()`
+    construit l'URL avec le token en clair (`.../bot<TOKEN>/<methode>`) ; les
+    exceptions `requests` se stringifient généralement AVEC l'URL complète, donc
+    logger une exception réseau brute ferait fuiter le token en production à
+    chaque incident. À utiliser sur TOUT texte journalisé qui peut contenir
+    une exception réseau ou une URL."""
+    token = config.TELEGRAM_BOT_TOKEN
+    texte = str(texte)
+    if token:
+        texte = texte.replace(token, "***")
+    return texte
+
+
 def _markup(keyboard):
     """Clavier inline → paramètre reply_markup (JSON)."""
     if not keyboard:
@@ -272,8 +286,12 @@ def executer(action: dict) -> bool:
         data["reply_markup"] = markup
     try:
         r = requests.post(_api(methode), data=data, timeout=30)
-        return bool(r.ok and r.json().get("ok"))
-    except requests.RequestException:
+        ok = bool(r.ok and r.json().get("ok"))
+        if not ok:
+            print(f"[bot] envoi KO ({typ}) : réponse non ok", flush=True)
+        return ok
+    except requests.RequestException as e:
+        print(f"[bot] envoi KO ({typ}) : {_masquer(e)}", flush=True)
         return False
 
 
@@ -301,6 +319,12 @@ def boucle(conn, rate_getter, transport, max_tours=None) -> int:
     `max_tours=None` = tourner indéfiniment ; les tests passent un entier.
     Un update qui plante est journalisé et SAUTÉ : l'offset avance quand même,
     sinon le bot rejouerait éternellement le même update cassé.
+
+    L'offset est persisté APRÈS CHAQUE update (pas une seule fois après tout le
+    lot) : `getUpdates` peut renvoyer des dizaines d'updates par tour, et si le
+    process est tué au milieu d'un lot, seul l'update en cours de traitement doit
+    être rejoué au redémarrage — pas tout le lot déjà consommé (ce qui créerait
+    des doublons, ex. `db.add_cible` n'a pas de clé d'idempotence).
     """
     tours, traites = 0, 0
     offset = db.get_bot_meta(conn, "offset")
@@ -310,7 +334,7 @@ def boucle(conn, rate_getter, transport, max_tours=None) -> int:
         try:
             updates = transport.get_updates(offset)
         except Exception as e:                       # réseau : on réessaie
-            print(f"[bot] getUpdates KO : {e}", flush=True)
+            print(f"[bot] getUpdates KO : {_masquer(e)}", flush=True)
             time.sleep(PAUSE_ERREUR)
             continue
         if not updates:
@@ -323,8 +347,9 @@ def boucle(conn, rate_getter, transport, max_tours=None) -> int:
                     transport.envoyer(action)
                 traites += 1
             except Exception as e:
-                print(f"[bot] update {up.get('update_id')} ignoré : {e}", flush=True)
-        db.set_bot_meta(conn, "offset", str(offset))
+                print(f"[bot] update {up.get('update_id')} ignoré : {_masquer(e)}",
+                      flush=True)
+            db.set_bot_meta(conn, "offset", str(offset))
     return traites
 
 

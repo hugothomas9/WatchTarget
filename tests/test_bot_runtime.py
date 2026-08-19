@@ -50,15 +50,87 @@ def test_boucle_reprend_l_offset_persiste(tmp_path, monkeypatch):
     assert t.offsets == [500]                      # pas de rejeu des anciens updates
 
 
-def test_boucle_survit_a_un_update_qui_plante(tmp_path, monkeypatch):
-    """Un update malformé ne doit pas tuer le bot ni bloquer l'offset."""
+def test_boucle_survit_a_un_update_qui_plante(tmp_path, monkeypatch, capsys):
+    """Un update qui déclenche une VRAIE exception dans le code de production
+    (ici via `db.upsert_user`, appelé par `traiter_update` pour tout update) ne
+    doit pas tuer le bot ni bloquer l'offset ; il est journalisé et sauté."""
     conn = _conn(tmp_path, monkeypatch)
+
+    orig_upsert = db.upsert_user
+
+    def upsert_qui_plante(conn_, uid, first_name, username):
+        if not first_name:          # notre update "casse" n'a pas de first_name
+            raise RuntimeError("boom")
+        return orig_upsert(conn_, uid, first_name, username)
+
+    monkeypatch.setattr(bot.db, "upsert_user", upsert_qui_plante)
+
     casse = {"update_id": 200, "message": {"chat": {"id": 111},
-                                           "from": {"id": 111}, "text": None}}
+                                           "from": {"id": 111}, "text": "/start"}}
     t = FauxTransport([[casse, _msg(201, "/start")]])
-    bot.boucle(conn, lambda: 0.006, t, max_tours=1)
-    assert db.get_bot_meta(conn, "offset") == "202"
+    n = bot.boucle(conn, lambda: 0.006, t, max_tours=1)
+
+    assert n == 1                                     # seul le 2e update est traité
+    assert db.get_bot_meta(conn, "offset") == "202"    # l'offset avance quand même
     assert any("WatchTarget" in str(a.get("text")) for a in t.envoyes)
+    sortie = capsys.readouterr().out
+    assert "ignoré" in sortie and "200" in sortie      # journalisé
+
+
+def test_boucle_persiste_l_offset_apres_chaque_update(tmp_path, monkeypatch):
+    """L'offset doit être persisté APRÈS CHAQUE update, pas après tout le lot :
+    si le process est tué au milieu d'un lot, seul l'update en cours doit être
+    rejoué au redémarrage — pas tout le lot déjà consommé."""
+    conn = _conn(tmp_path, monkeypatch)
+
+    appels = []
+    orig_set_bot_meta = db.set_bot_meta
+
+    def espion(conn_, cle, valeur):
+        if cle == "offset":
+            appels.append(valeur)
+        return orig_set_bot_meta(conn_, cle, valeur)
+
+    monkeypatch.setattr(bot.db, "set_bot_meta", espion)
+
+    class TransportQuiPlanteAuMilieu(FauxTransport):
+        def envoyer(self, action):
+            if action.get("chat_id") == 222:    # les actions du 2e update seulement
+                raise RuntimeError("panne réseau simulée")
+            return super().envoyer(action)
+
+    lot = [_msg(300, "/start", uid=111), _msg(301, "/start", uid=222),
+           _msg(302, "/start", uid=111)]
+    t = TransportQuiPlanteAuMilieu([lot])
+    bot.boucle(conn, lambda: 0.006, t, max_tours=1)
+
+    # persisté après CHAQUE update (301, 302, 303) et non une seule fois (303)
+    assert appels == ["301", "302", "303"]
+    assert db.get_bot_meta(conn, "offset") == "303"
+
+
+def test_boucle_masque_le_token_dans_les_logs_reseau(tmp_path, monkeypatch, capsys):
+    """Une exception réseau (ex. `requests.RequestException`) se stringifie
+    généralement AVEC l'URL complète, donc avec le token en clair : il ne doit
+    JAMAIS apparaître tel quel dans les logs."""
+    conn = _conn(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "123:FAKETOKEN")
+    monkeypatch.setattr(bot.time, "sleep", lambda s: None)   # pas d'attente réelle
+
+    class TransportEnPanne:
+        def get_updates(self, offset):
+            raise RuntimeError(
+                "Connection error to "
+                "https://api.telegram.org/bot123:FAKETOKEN/getUpdates")
+
+        def envoyer(self, action):
+            raise AssertionError("ne doit pas être appelé")
+
+    bot.boucle(conn, lambda: 0.006, TransportEnPanne(), max_tours=1)
+
+    sortie = capsys.readouterr().out
+    assert "123:FAKETOKEN" not in sortie
+    assert "***" in sortie
 
 
 def test_executer_construit_les_bons_appels(monkeypatch):
@@ -88,3 +160,20 @@ def test_executer_construit_les_bons_appels(monkeypatch):
                                       "answerCallbackQuery"]
     # le clavier part en JSON sous reply_markup
     assert "callback_data" in appels[2][1]["reply_markup"]
+
+
+def test_executer_journalise_l_echec_reseau_sans_fuite_de_token(monkeypatch, capsys):
+    """Un envoi qui échoue ne doit pas être silencieux (service 24h/24 sans
+    supervision) — et le message journalisé ne doit pas fuiter le token."""
+    monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "123:FAKETOKEN")
+
+    def post_en_panne(url, data=None, timeout=None):
+        raise bot.requests.RequestException(f"boom sur {url}")
+
+    monkeypatch.setattr(bot.requests, "post", post_en_panne)
+    ok = bot.executer({"type": "send", "chat_id": 1, "text": "hello", "keyboard": []})
+    assert ok is False
+
+    sortie = capsys.readouterr().out
+    assert "123:FAKETOKEN" not in sortie
+    assert "***" in sortie
