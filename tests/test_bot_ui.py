@@ -210,6 +210,19 @@ def test_ecran_alertes_vide_invite_a_creer():
     assert "new" in _cbs(e)
 
 
+def test_ecran_alertes_borne_l_affichage_a_20():
+    """Telegram plafonne le nombre de boutons/la taille du clavier : au-delà de
+    ALERTES_PAR_ECRAN alertes, on n'affiche que les premières et on mentionne le
+    reste dans le texte plutôt que de générer un clavier sans limite."""
+    alertes = [{"id": i, "libelle": f"Alerte {i}", "mots_cles": "x", "actif": 1, "nb": 1}
+               for i in range(25)]
+    e = bot_ui.ecran_alertes(alertes)
+    boutons_alerte = [cb for cb in _cbs(e) if cb.startswith("a:")]
+    assert len(boutons_alerte) <= bot_ui.ALERTES_PAR_ECRAN
+    assert len(boutons_alerte) == 20
+    assert "5" in e["text"] and "autres" in e["text"]
+
+
 def test_ecran_alerte_actions_et_pause():
     a = {"id": 7, "libelle": "Ma Daytona", "mots_cles": "rolex daytona",
          "actif": 1, "cree_le": "2026-08-16T10:00:00+00:00"}
@@ -232,20 +245,34 @@ def test_ecran_confirm_suppression():
 
 
 def test_callback_data_toujours_sous_64_octets():
+    alerte_longue = {"id": 999999, "libelle": "x" * 80, "mots_cles": "y" * 80,
+                      "actif": 1, "cree_le": "2026-08-16T10:00:00+00:00"}
     ecrans = [
         bot_ui.ecran_accueil(3),
         bot_ui.ecran_alertes([{"id": 999999, "libelle": "x" * 80,
                                "mots_cles": "y" * 80, "actif": 1, "nb": 3}]),
-        bot_ui.ecran_alerte({"id": 999999, "libelle": "x" * 80, "mots_cles": "y" * 80,
-                             "actif": 1, "cree_le": "2026-08-16T10:00:00+00:00"}, 5, 2),
+        bot_ui.ecran_alerte(alerte_longue, 5, 2),
         bot_ui.ecran_confirm_suppression({"id": 999999, "libelle": "x" * 80,
                                           "mots_cles": ""}),
         bot_ui.ecran_aide(),
+        bot_ui.ecran_demande_mots_cles(),
+        bot_ui.ecran_demande_libelle(alerte_longue),
+        bot_ui.ecran_demande_kw(alerte_longue),
+        bot_ui.ecran_alerte_vide(alerte_longue),
     ]
     for e in ecrans:
         assert len(e["text"]) <= bot_ui.LIMITE_TEXTE
         for cb in _cbs(e):
             assert len(cb.encode()) <= 64, cb
+
+    # `page_montres` a un format d'écran différent ({"entete", "blocs", ...}) : le
+    # clavier de navigation est vérifié séparément avec un id d'alerte long.
+    montres = bot_ui.preparer_montres(
+        [w(uid=f"u{i}", ref=f"REF{i:03d}") for i in range(10)], RATE)
+    p = bot_ui.page_montres(alerte_longue, montres, page=1)
+    for ligne in p["keyboard"]:
+        for bouton in ligne:
+            assert len(bouton["callback_data"].encode()) <= 64, bouton["callback_data"]
 
 
 def test_ecran_alerte_echappe_le_html():
@@ -256,6 +283,17 @@ def test_ecran_alerte_echappe_le_html():
     assert "&lt;b&gt;hack&lt;/b&gt;" in e["text"]
     assert "<b>hack</b>" not in e["text"]
     assert "a &amp; b" in e["text"]
+
+
+def test_ecran_alerte_echappe_aussi_la_date_de_creation():
+    """`cree_le` vient de la base comme le libellé ou les mots-clés : tout champ
+    base inséré dans un `text` doit passer par `_esc`, sans exception.
+    Le champ est tronqué à 10 caractères avant affichage ; la balise ouvrante tient
+    dans ces 10 premiers caractères pour que le test reste valable après la coupe."""
+    e = bot_ui.ecran_alerte({"id": 1, "libelle": "ok", "mots_cles": "ok",
+                             "actif": 1, "cree_le": "<b>2026-08-16"}, 0, 0)
+    assert "<b>2026" not in e["text"]
+    assert "&lt;b&gt;2026" in e["text"]
 
 
 ALERTE = {"id": 7, "libelle": "Ma Daytona", "mots_cles": "rolex daytona", "actif": 1}
@@ -302,6 +340,22 @@ def test_page_montres_chaque_bloc_a_titre_et_legende_valide():
         assert bloc["caption"].startswith("<b>")
         assert len(bloc["caption"]) <= bot_ui.LIMITE_LEGENDE
         assert bloc["photo"] == "https://img/1.jpg"
+
+
+def test_page_montres_bloc_sans_photo():
+    """Une référence sans aucune image (`image` absente) doit produire un bloc avec
+    `photo: None` et une légende malgré tout valide — chemin exercé par la tâche
+    suivante (envoi du message sans photo attachée)."""
+    montres = bot_ui.preparer_montres([
+        w(uid="a", ref="AAA", images="[]"),
+        w(uid="b", ref="BBB", images="[]"),
+    ], RATE)
+    p = bot_ui.page_montres(ALERTE, montres, page=1)
+    assert len(p["blocs"]) == 2
+    for bloc in p["blocs"]:
+        assert bloc["photo"] is None
+        assert bloc["caption"].startswith("<b>")
+        assert len(bloc["caption"]) <= bot_ui.LIMITE_LEGENDE
 
 
 def test_ecran_alerte_vide():

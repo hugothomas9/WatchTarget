@@ -14,6 +14,7 @@ LIMITE_LEGENDE = 1024      # légende d'une photo Telegram
 LIMITE_TEXTE = 4096        # message texte Telegram
 REFS_PAR_PAGE = 3          # blocs (= photos) par page
 ANNONCES_PAR_REF = 8       # annonces listées par référence, puis « …et N autres »
+ALERTES_PAR_ECRAN = 20     # boutons d'alerte max sur l'écran « Mes alertes »
 
 # Champs qui ne doivent JAMAIS sortir du bot (edge d'arbitrage privé).
 CHAMPS_INTERDITS = ("prix_detaxe_eur", "prix_detaxe_jpy", "prix_ht",
@@ -194,16 +195,24 @@ def ecran_alertes(alertes: list[dict]) -> dict:
     if not alertes:
         return _ecran("Tu n'as aucune alerte pour l'instant.",
                       [[_b("🔔 Créer une alerte", "new")], [_b("◀ Menu", "home")]])
+    # Telegram plafonne le nombre de boutons et la taille d'un clavier inline : on
+    # borne l'AFFICHAGE (pas de pagination, non demandée par la spec) et on signale
+    # le reste dans le texte plutôt que de risquer une erreur 400 / un écran vide.
+    visibles = alertes[:ALERTES_PAR_ECRAN]
     clavier = [[_b(f"{'🟢' if a.get('actif') else '⏸'} {_nom(a)} — "
                    f"{a.get('nb', 0)} montres", f"a:{a['id']}")]
-               for a in alertes]
+               for a in visibles]
     clavier.append([_b("🔔 Créer une alerte", "new"), _b("◀ Menu", "home")])
-    return _ecran("Tes alertes :", clavier)
+    texte = "Tes alertes :"
+    reste = len(alertes) - len(visibles)
+    if reste > 0:
+        texte += f"\n\n… et {reste} autres alertes non affichées."
+    return _ecran(texte, clavier)
 
 
 def ecran_alerte(alerte: dict, nb_montres: int, nb_refs: int) -> dict:
     actif = bool(alerte.get("actif"))
-    jour = (alerte.get("cree_le") or "")[:10]
+    jour = _esc((alerte.get("cree_le") or "")[:10])
     texte = (f"{'🟢' if actif else '⏸'} <b>{_esc(_nom(alerte))}</b>\n"
              f"Mots-clés : {_esc(alerte.get('mots_cles'))}\n"
              f"{nb_montres} montres · {nb_refs} référence(s)")
