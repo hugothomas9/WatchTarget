@@ -13,8 +13,11 @@ marge (voir docs/specs/2026-08-17-bot-telegram-interactif.md).
 
 Lancer :  python -m backend.bot
 """
+import json
 import sys
 import time
+
+import requests
 
 from . import bot_ui, config, db
 
@@ -231,3 +234,116 @@ def traiter_update(conn, update: dict, rate: float) -> list[dict]:
         db.clear_bot_etape(conn, uid)
         return _accueil(conn, uid, chat_id)
     return _traiter_texte(conn, uid, chat_id, texte)
+
+
+# --- exécution réseau -------------------------------------------------------
+def _markup(keyboard):
+    """Clavier inline → paramètre reply_markup (JSON)."""
+    if not keyboard:
+        return None
+    return json.dumps({"inline_keyboard": keyboard})
+
+
+def executer(action: dict) -> bool:
+    """Exécute UNE action décidée par `traiter_update`. False si l'appel échoue."""
+    from .telegram import _api
+    typ = action.get("type")
+    if typ == "send":
+        methode, data = "sendMessage", {
+            "chat_id": action["chat_id"], "text": action["text"],
+            "parse_mode": "HTML", "disable_web_page_preview": "true"}
+    elif typ == "photo":
+        methode, data = "sendPhoto", {
+            "chat_id": action["chat_id"], "photo": action["photo"],
+            "caption": action["caption"], "parse_mode": "HTML"}
+    elif typ == "edit":
+        methode, data = "editMessageText", {
+            "chat_id": action["chat_id"], "message_id": action["message_id"],
+            "text": action["text"], "parse_mode": "HTML",
+            "disable_web_page_preview": "true"}
+    elif typ == "answer":
+        methode, data = "answerCallbackQuery", {
+            "callback_query_id": action["callback_id"],
+            "text": action.get("text", "")}
+    else:
+        return False
+    markup = _markup(action.get("keyboard"))
+    if markup:
+        data["reply_markup"] = markup
+    try:
+        r = requests.post(_api(methode), data=data, timeout=30)
+        return bool(r.ok and r.json().get("ok"))
+    except requests.RequestException:
+        return False
+
+
+class Transport:
+    """Accès réel à l'API Telegram (injectable pour les tests)."""
+
+    def get_updates(self, offset):
+        from .telegram import _api
+        params = {"timeout": POLL_TIMEOUT}
+        if offset is not None:
+            params["offset"] = offset
+        r = requests.get(_api("getUpdates"), params=params,
+                         timeout=POLL_TIMEOUT + 10)
+        r.raise_for_status()
+        return r.json().get("result", []) or []
+
+    def envoyer(self, action):
+        return executer(action)
+
+
+def boucle(conn, rate_getter, transport, max_tours=None) -> int:
+    """Long polling : un tour = un getUpdates + exécution des actions décidées.
+
+    `rate_getter` est appelé une fois par tour (un seul appel de change par lot).
+    `max_tours=None` = tourner indéfiniment ; les tests passent un entier.
+    Un update qui plante est journalisé et SAUTÉ : l'offset avance quand même,
+    sinon le bot rejouerait éternellement le même update cassé.
+    """
+    tours, traites = 0, 0
+    offset = db.get_bot_meta(conn, "offset")
+    offset = int(offset) if offset else None
+    while max_tours is None or tours < max_tours:
+        tours += 1
+        try:
+            updates = transport.get_updates(offset)
+        except Exception as e:                       # réseau : on réessaie
+            print(f"[bot] getUpdates KO : {e}", flush=True)
+            time.sleep(PAUSE_ERREUR)
+            continue
+        if not updates:
+            continue
+        rate = rate_getter()
+        for up in updates:
+            offset = max(offset or 0, up.get("update_id", 0) + 1)
+            try:
+                for action in traiter_update(conn, up, rate):
+                    transport.envoyer(action)
+                traites += 1
+            except Exception as e:
+                print(f"[bot] update {up.get('update_id')} ignoré : {e}", flush=True)
+        db.set_bot_meta(conn, "offset", str(offset))
+    return traites
+
+
+def main():
+    if not config.TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN absent : rien à faire.")
+        return 1
+    from . import fx
+    conn = db.connect()
+    db.init_db(conn)
+    print("[bot] démarré (long polling)", flush=True)
+    try:
+        boucle(conn, fx.get_rate, Transport())
+    except KeyboardInterrupt:
+        print("[bot] arrêt", flush=True)
+    finally:
+        conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
