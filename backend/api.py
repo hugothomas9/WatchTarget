@@ -2,6 +2,7 @@
 
 Lancer :  uvicorn backend.api:app --port 8765
 """
+import hmac
 import json
 import threading
 from contextlib import contextmanager
@@ -77,11 +78,25 @@ def _rows(rows):
 
 @app.get("/api/stock")
 def stock(marque: str = "", famille: str = "", sort: str = "date",
-          dispo: int = 0):
+          dispo: int = 0, q: str = ""):
     with _conn() as conn:
         return _rows(db.get_watches(conn, marque=marque or None,
                                     famille=famille or None, sort=sort,
-                                    only_dispo=bool(dispo)))
+                                    only_dispo=bool(dispo), q=q or None))
+
+
+@app.get("/api/modeles")
+def modeles(marque: str = ""):
+    """Modèles génériques (familles normalisées : Daytona, Seamaster…) présents
+    en base — filtre INDÉPENDANT de la marque (filtrable par marque en option)."""
+    with _conn() as conn:
+        sql = "SELECT famille, COUNT(*) c FROM watches WHERE famille != ''"
+        args = []
+        if marque:
+            sql += " AND marque LIKE ?"
+            args.append(f"%{marque}%")
+        sql += " GROUP BY famille ORDER BY famille"
+        return [r[0] for r in conn.execute(sql, args)]
 
 
 @app.post("/api/auth/telegram")
@@ -203,14 +218,16 @@ def marques():
 
 @app.get("/api/opportunites")
 def opportunites(spread_min: float = None, liq_min: int = None,
-                 sort: str = "spread", marque: str = ""):
+                 sort: str = "spread", marque: str = "", famille: str = "",
+                 prix_max: float = None, q: str = ""):
     from .config import SPREAD_MIN_EUR, LIQUIDITY_MIN_LISTINGS
     with _conn() as conn:
         rows = db.get_opportunities(
             conn,
             spread_min=spread_min if spread_min is not None else SPREAD_MIN_EUR,
             liq_min=liq_min if liq_min is not None else LIQUIDITY_MIN_LISTINGS,
-            sort=sort, marque=marque or None)
+            sort=sort, marque=marque or None, famille=famille or None,
+            prix_max=prix_max, q=q or None)
         return _rows(rows)
 
 
@@ -258,6 +275,35 @@ def collecte(request: Request, mode: str = "incremental"):
         return pipeline.run(mode)
     finally:
         _collect_lock.release()
+
+
+@app.post("/api/telegram/webhook")
+def telegram_webhook(update: dict, request: Request):
+    """Bot Telegram en mode WEBHOOK : Telegram POSTe ici chaque update.
+
+    Alternative au long polling (`python -m backend.bot`), qui suppose un process
+    allumé en permanence — impossible sur un hébergement gratuit qui s'endort.
+    Ici c'est l'appel de Telegram qui réveille le service. Même logique métier
+    dans les deux cas (`bot.executer_update`).
+
+    On répond TOUJOURS 200, même si le traitement plante : Telegram rejoue un
+    update tant qu'il n'a pas de 2xx, donc un update cassé bloquerait la file
+    du bot indéfiniment. L'erreur est journalisée et l'update abandonné (même
+    politique que la boucle de long polling)."""
+    from . import bot, fx
+    secret = config.TELEGRAM_WEBHOOK_SECRET
+    if not secret:                       # mode polling : l'endpoint n'existe pas
+        raise HTTPException(404, "webhook désactivé")
+    recu = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(recu, secret):
+        raise HTTPException(403, "secret de webhook invalide")
+    try:
+        with _conn() as conn:
+            bot.executer_update(conn, update, fx.get_rate(), bot.Transport())
+    except Exception as e:
+        print(f"[webhook] update {update.get('update_id')} ignoré : "
+              f"{bot._masquer(e)}", flush=True)
+    return {"ok": True}
 
 
 # Front buildé (optionnel : présent après `npm run build`)

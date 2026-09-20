@@ -50,13 +50,14 @@ function useIsMobile() {
 
 // Carte mobile : photo + identité + les 3 chiffres qui décident (détaxé, vendu
 // réel, marge) — `enriched` = vue opportunités/cibles/favoris (métriques EW).
-function CarteMontre({ w, onFav, isFav, enriched }) {
+function CarteMontre({ w, onFav, isFav, enriched, onOpen }) {
   const px = w.ew_median_eur ?? w.median_eur
   const chiffre = { fontSize: 13 }
   return (
     <div style={{ border: '1px solid #e2e2e8', borderRadius: 10, padding: 10,
-                  display: 'flex', gap: 10,
-                  opacity: w.status === 'vendue' ? 0.45 : 1 }}>
+                  display: 'flex', gap: 10, cursor: 'pointer',
+                  opacity: w.status === 'vendue' ? 0.45 : 1 }}
+         onClick={e => { if (!e.target.closest('a,button')) onOpen(w) }}>
       {w.images?.[0]
         ? <img src={w.images[0]} alt="" loading="lazy"
                onError={e => { e.currentTarget.style.visibility = 'hidden' }}
@@ -121,9 +122,10 @@ function FavStar({ uid, isFav, onFav }) {
   )
 }
 
-function Row({ w, onFav, isFav }) {
+function Row({ w, onFav, isFav, onOpen }) {
   return (
-    <tr style={{ opacity: w.status === 'vendue' ? 0.45 : 1 }}>
+    <tr style={{ opacity: w.status === 'vendue' ? 0.45 : 1, cursor: 'pointer' }}
+        onClick={e => { if (!e.target.closest('a,button')) onOpen(w) }}>
       <td><FavStar uid={w.uid} isFav={isFav} onFav={onFav} /></td>
       <td>{w.images?.[0]
         ? <img src={w.images[0]} alt="" loading="lazy"
@@ -148,12 +150,13 @@ function Row({ w, onFav, isFav }) {
   )
 }
 
-function OppRow({ w, onFav, isFav }) {
+function OppRow({ w, onFav, isFav, onOpen }) {
   // lien EveryWatch : résultats de ventes RÉELLES pour la réf (auctionType=result)
   const ew = `https://everywatch.com/watch-listing?searchTerm=${encodeURIComponent(w.reference)}&auctionType=result`
   const wc = `https://watchcharts.com/watches?q=${encodeURIComponent(w.reference)}`
   return (
-    <tr style={{ opacity: w.status === 'vendue' ? 0.45 : 1 }}>
+    <tr style={{ opacity: w.status === 'vendue' ? 0.45 : 1, cursor: 'pointer' }}
+        onClick={e => { if (!e.target.closest('a,button')) onOpen(w) }}>
       <td><FavStar uid={w.uid} isFav={isFav} onFav={onFav} /></td>
       <td>{w.images?.[0]
         ? <img src={w.images[0]} alt="" loading="lazy"
@@ -230,6 +233,125 @@ function OppRow({ w, onFav, isFav }) {
   )
 }
 
+// Courbe d'évolution du prix (les points s'enregistrent à chaque changement de
+// prix constaté en collecte). Vert = le prix a baissé depuis le 1er point (bon
+// pour l'acheteur), rouge = il a monté.
+function Sparkline({ uid }) {
+  const [pts, setPts] = useState(null)
+  useEffect(() => {
+    fetch(`/api/historique/${encodeURIComponent(uid)}`)
+      .then(r => r.json()).then(setPts).catch(() => setPts([]))
+  }, [uid])
+  if (!pts) return <span style={{ color: '#888', fontSize: 13 }}>chargement…</span>
+  const vals = pts.map(p => p.prix_detaxe_eur ?? p.prix_ttc).filter(v => v != null)
+  if (vals.length < 2) {
+    return <span style={{ color: '#888', fontSize: 13 }}>
+      pas encore de variation enregistrée — l'historique se construit à chaque collecte
+    </span>
+  }
+  const w = 280, h = 60
+  const min = Math.min(...vals), max = Math.max(...vals)
+  const span = (max - min) || 1
+  const xy = vals.map((v, i) =>
+    `${(i / (vals.length - 1)) * (w - 4) + 2},${h - 6 - ((v - min) / span) * (h - 12)}`)
+  const monte = vals[vals.length - 1] >= vals[0]
+  return (
+    <div>
+      <svg width={w} height={h} style={{ display: 'block' }}>
+        <polyline points={xy.join(' ')} fill="none"
+                  stroke={monte ? '#b00020' : '#0a7d2c'} strokeWidth="2" />
+      </svg>
+      <div style={{ fontSize: 12, color: '#666' }}>
+        {vals.length} points · min {eur(min)} · max {eur(max)} ·
+        dernier <b>{eur(vals[vals.length - 1])}</b>
+      </div>
+    </div>
+  )
+}
+
+// Fiche détaillée : tout ce qu'il faut pour décider, en un panneau — photos,
+// état/accessoires, métriques de valeur, évolution du prix, liens.
+function FicheMontre({ w, onClose }) {
+  const [img, setImg] = useState(0)
+  const imgs = (w.images || []).filter(Boolean)
+  const px = w.ew_median_eur ?? w.median_eur
+  const ew = `https://everywatch.com/watch-listing?searchTerm=${encodeURIComponent(w.reference)}&auctionType=result`
+  const Ligne = ({ l, v, t }) => v
+    ? <div style={{ fontSize: 14, margin: '2px 0' }} title={t}>
+        <span style={{ color: '#888' }}>{l} : </span>{v}</div>
+    : null
+  const Metrique = ({ l, v, forte }) => v == null ? null
+    : <div style={{ fontSize: 14 }}>
+        <span style={{ color: '#888' }}>{l}</span><br />
+        <b style={forte ? { color: '#0a7d2c', fontSize: 17 } : {}}>{v}</b>
+      </div>
+  return (
+    <div onClick={onClose}
+         style={{ position: 'fixed', inset: 0, background: 'rgba(20,20,28,.5)',
+                  zIndex: 50, display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', padding: 12 }}>
+      <div onClick={e => e.stopPropagation()}
+           style={{ background: '#fff', borderRadius: 12, maxWidth: 640,
+                    width: '100%', maxHeight: '92vh', overflowY: 'auto',
+                    padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 19 }} title={w.modele_original}>
+            {w.marque} {w.modele}
+          </h2>
+          <button onClick={onClose} style={{ border: 'none', background: 'none',
+                  fontSize: 22, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+        </div>
+        {imgs.length > 0 && <>
+          <img src={imgs[img]} alt=""
+               style={{ width: '100%', height: 260, objectFit: 'contain',
+                        background: '#f6f6f8', borderRadius: 8, marginTop: 10 }} />
+          {imgs.length > 1 && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, overflowX: 'auto' }}>
+              {imgs.map((u, i) => (
+                <img key={i} src={u} alt="" onClick={() => setImg(i)}
+                     style={{ width: 48, height: 48, objectFit: 'cover',
+                              borderRadius: 6, cursor: 'pointer',
+                              outline: i === img ? '2px solid #4a6cf7' : 'none' }} />
+              ))}
+            </div>
+          )}
+        </>}
+        <div style={{ marginTop: 10 }}>
+          <Ligne l="Référence" v={w.reference} />
+          <Ligne l="Boutique" v={w.boutique} />
+          <Ligne l="État" v={w.etat} t={w.etat_original} />
+          <Ligne l="Accessoires" v={w.raw_accessoires} />
+          <Ligne l="Année" v={w.annee} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+                      gap: 10, background: '#f7f7f9', borderRadius: 8,
+                      padding: 10, marginTop: 10 }}>
+          <Metrique l="Prix détaxé JP" v={eur(w.prix_detaxe_eur)} />
+          <Metrique l="Vendu réel (EW)"
+                    v={px != null ? `${eur(px)}${w.ew_n_sales ? ` ×${w.ew_n_sales}` : ''}` : null} />
+          <Metrique l="Dernière vente"
+                    v={w.ew_last_eur != null ? `${eur(w.ew_last_eur)} (${w.ew_last_sale || '—'})` : null} />
+          <Metrique l="Liquidité"
+                    v={w.ew_sales_12m != null ? `${w.ew_sales_12m} ventes/an` : null} />
+          <Metrique l="Marge brute" forte
+                    v={w.spread_eur != null ? `+${eur(w.spread_eur)}` : null} />
+          <Metrique l="Net plateforme"
+                    v={w.marge_nette_eur != null ? eur(w.marge_nette_eur) : null} />
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <b style={{ fontSize: 14 }}>Évolution du prix</b>
+          <div style={{ marginTop: 4 }}><Sparkline uid={w.uid} /></div>
+        </div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 14, fontSize: 14 }}>
+          <a href={w.url} target="_blank" rel="noreferrer">Fiche boutique →</a>
+          {w.reference &&
+            <a href={ew} target="_blank" rel="noreferrer">Ventes réelles EveryWatch →</a>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const [page, setPage] = useState('cibles')
   const [rows, setRows] = useState([])
@@ -237,6 +359,17 @@ export default function App() {
   const [marque, setMarque] = useState('')
   const [familles, setFamilles] = useState([])
   const [famille, setFamille] = useState('')
+  const [qInput, setQInput] = useState('')     // saisie recherche (immédiate)
+  const [qDeb, setQDeb] = useState('')         // valeur débouncée envoyée à l'API
+  const [prixMax, setPrixMax] = useState('')
+  const [margeMin, setMargeMin] = useState('')
+  const [detail, setDetail] = useState(null)   // montre ouverte en fiche détaillée
+
+  // recherche débouncée : on n'interroge pas l'API à chaque frappe
+  useEffect(() => {
+    const t = setTimeout(() => setQDeb(qInput.trim()), 350)
+    return () => clearTimeout(t)
+  }, [qInput])
   const [sort, setSort] = useState('benef')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -294,11 +427,11 @@ export default function App() {
       .catch(() => {})
   useEffect(() => { loadFavUids() }, [])
 
-  // cascade Marque → Ligne : les familles dispo suivent la marque choisie
+  // filtre Modèle INDÉPENDANT (Daytona, Seamaster…) : liste globale, resserrée
+  // par la marque si une marque est choisie
   useEffect(() => {
     setFamille('')
-    if (!marque) { setFamilles([]); return }
-    fetch(`/api/familles?marque=${encodeURIComponent(marque)}`)
+    fetch('/api/modeles' + (marque ? `?marque=${encodeURIComponent(marque)}` : ''))
       .then(r => r.json()).then(setFamilles).catch(() => setFamilles([]))
   }, [marque])
 
@@ -307,11 +440,18 @@ export default function App() {
   useEffect(() => {
     const ctrl = new AbortController()
     const s = page === 'stock' && sort === 'benef' ? 'date' : sort
+    const triOpp = ['liquidite', 'net', 'volatilite'].includes(sort) ? sort : 'spread'
     const qs = page === 'cibles'
       ? ''
-      : (page === 'opportunites' || page === 'favoris')
-      ? '?' + new URLSearchParams({ marque, sort: ['liquidite', 'net', 'volatilite'].includes(sort) ? sort : 'spread' }).toString()
+      : page === 'favoris'
+      ? '?' + new URLSearchParams({ sort: triOpp }).toString()
+      : page === 'opportunites'
+      ? '?' + new URLSearchParams({ marque, famille, sort: triOpp,
+                                    ...(qDeb ? { q: qDeb } : {}),
+                                    ...(prixMax ? { prix_max: prixMax } : {}),
+                                    ...(margeMin ? { spread_min: margeMin } : {}) }).toString()
       : '?' + new URLSearchParams({ marque, famille, sort: s,
+                                    ...(qDeb ? { q: qDeb } : {}),
                                     ...(page === 'stock' && dispoOnly ? { dispo: 1 } : {}) }).toString()
     setError('')
     fetch(`/api/${page}${qs}`, { signal: ctrl.signal })
@@ -319,7 +459,7 @@ export default function App() {
       .then(setRows)
       .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
     return () => ctrl.abort()
-  }, [page, marque, famille, sort, refresh, dispoOnly])
+  }, [page, marque, famille, sort, refresh, dispoOnly, qDeb, prixMax, margeMin])
 
   const reload = () => setRefresh(n => n + 1)
 
@@ -386,13 +526,24 @@ export default function App() {
           <option value="">Toutes</option>
           {marques.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
-        {familles.length > 0 && <>
-          <span style={{ whiteSpace: 'nowrap' }}>Ligne :</span>
-          <select value={famille} onChange={e => setFamille(e.target.value)}
-                  style={_selStyle}>
-            <option value="">Toutes</option>
-            {familles.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
+        <span style={{ whiteSpace: 'nowrap' }}>Modèle :</span>
+        <select value={famille} onChange={e => setFamille(e.target.value)}
+                style={_selStyle}>
+          <option value="">Tous</option>
+          {familles.map(f => <option key={f} value={f}>{f}</option>)}
+        </select>
+        {(page === 'stock' || page === 'opportunites') && (
+          <input value={qInput} onChange={e => setQInput(e.target.value)}
+                 placeholder="🔍 rechercher (réf, modèle…)"
+                 style={{ flex: '1 1 150px', maxWidth: 220, padding: '4px 8px' }} />
+        )}
+        {page === 'opportunites' && <>
+          <input value={prixMax} onChange={e => setPrixMax(e.target.value.replace(/[^0-9]/g, ''))}
+                 placeholder="Achat max €" title="prix d'achat détaxé maximum"
+                 style={{ width: 90, padding: '4px 8px' }} />
+          <input value={margeMin} onChange={e => setMargeMin(e.target.value.replace(/[^0-9]/g, ''))}
+                 placeholder="Marge min €" title="marge brute minimum"
+                 style={{ width: 90, padding: '4px 8px' }} />
         </>}
         <span style={{ whiteSpace: 'nowrap' }}>Tri :</span>
         {(page === 'opportunites' || page === 'favoris') ? (
@@ -458,7 +609,7 @@ export default function App() {
       {mobile ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {rows.map(w => (
-            <CarteMontre key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)}
+            <CarteMontre key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} onOpen={setDetail}
               enriched={page === 'opportunites' || page === 'favoris' || page === 'cibles'} />
           ))}
         </div>
@@ -486,8 +637,8 @@ export default function App() {
           </tr></thead>
         )}
         <tbody>{rows.map(w => (page === 'opportunites' || page === 'favoris' || page === 'cibles')
-          ? <OppRow key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} />
-          : <Row key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} />)}</tbody>
+          ? <OppRow key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} onOpen={setDetail} />
+          : <Row key={w.uid} w={w} onFav={fav} isFav={favUids.has(w.uid)} onOpen={setDetail} />)}</tbody>
       </table>
       )}
       {rows.length === 0 && !error && (page === 'opportunites'
@@ -497,6 +648,7 @@ export default function App() {
         ? <p>Aucune montre ne correspond à tes alertes. Crée une alerte ci-dessus
             (ex « rolex daytona 126506A ») — tu seras aussi prévenu par Telegram.</p>
         : <p>Aucune montre — lance une collecte.</p>)}
+      {detail && <FicheMontre w={detail} onClose={() => setDetail(null)} />}
     </div>
   )
 }

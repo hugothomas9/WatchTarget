@@ -25,7 +25,15 @@ DISPO, VENDUE, RETIREE, INCONNU = "dispo", "vendue", "retiree", None
 
 
 def _status_watchnian(html: str) -> str | None:
-    return VENDUE if "price-soldout" in html else DISPO
+    """Fail-safe : VENDUE sur marqueur explicite, DISPO seulement sur preuve
+    POSITIVE (bouton panier — absent des pages vendues, vérifié live). L'ancien
+    « dispo par défaut » gardait des vendues en vitrine à vie dès que le site
+    changeait de structure ou redirigeait vers un listing."""
+    if "price-soldout" in html or "売約済" in html:
+        return VENDUE
+    if "カートに入れる" in html:
+        return DISPO
+    return INCONNU
 
 
 def _status_jackroad(html: str) -> str | None:
@@ -132,11 +140,24 @@ def _status_brandbank(html: str) -> str | None:
 
 
 def _status_housekihiroba(html: str) -> str | None:
-    """Housekihiroba : la ligne « 在庫 » de la fiche porte 在庫有り (dispo). Le
-    « 在庫なし » se trouve aussi dans un template <script> sur TOUTES les fiches →
-    on ne se fie qu'au 在庫有り explicite ; sinon INCONNU (pas de faux positif)."""
-    if "在庫有り" in html or "在庫あり" in html:
-        return DISPO
+    """Housekihiroba : lecture SCOPÉE de la ligne « 在庫 » du tableau th/td (comme
+    le connecteur). Un scan texte global est impossible : « 在庫なし » figure dans
+    un template <script> sur TOUTES les fiches — c'est l'angle mort qui empêchait
+    258 montres de jamais passer « vendue ». Dispo = 在庫有り/In Stock dans LA
+    ligne ; vendu = 在庫なし/品切れ/売り切れ dans LA ligne ; sinon INCONNU."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    for th in soup.find_all("th"):
+        if "在庫" not in th.get_text():
+            continue
+        td = th.find_next_sibling("td")
+        if not td:
+            continue
+        val = td.get_text(" ", strip=True)
+        if re.search(r"在庫有り|在庫あり|In\s*Stock", val, re.I):
+            return DISPO
+        if re.search(r"在庫なし|品切れ|売り切れ|完売|ご売約|SOLD\s*OUT", val, re.I):
+            return VENDUE
     return INCONNU
 
 

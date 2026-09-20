@@ -22,3 +22,20 @@ def test_garde_reference_et_taille():
 def test_vide():
     assert traduire_nom("") == ""
     assert traduire_nom(None) == ""
+
+
+def test_variantes_avec_separateurs():
+    """Les composés écrits avec espace/point (オーデマ ピゲ) doivent se traduire
+    comme leurs équivalents collés — c'était le gros des trous du glossaire."""
+    assert traduire_nom("オーデマ ピゲ ロイヤルオーク") == "Audemars Piguet Royal Oak"
+    assert traduire_nom("パテック フィリップ カラトラバ").startswith("Patek Philippe")
+    assert "TAG Heuer" in traduire_nom("タグ・ホイヤー カレラ")
+
+
+def test_termes_frequents_completes():
+    assert traduire_nom("マスターコレクション デイト") == "Master Collection Date"
+    assert traduire_nom("レベルソ クラシック") == "Reverso Classic"
+    assert "Navitimer" in traduire_nom("ナビタイマー B01")
+    # les composés longs gagnent sur leurs sous-chaînes
+    assert "Datejust" in traduire_nom("デイトジャスト")      # pas « Datejust Date »
+    assert traduire_nom("デイデイト") == "Day-Date"

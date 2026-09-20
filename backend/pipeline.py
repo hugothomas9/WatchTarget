@@ -61,6 +61,7 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
     rate = fx.get_rate()
     conn = db.connect()
     db.init_db(conn)
+    debut = db.now_iso()   # borne pour les alertes de baisse (points de CE run)
     # UIDs déjà connus = table seen + montres déjà en base → sautés au re-scan
     # (reprise rapide : on n'ouvre pas les fiches déjà collectées).
     seen = db.load_seen_uids(conn)
@@ -131,6 +132,11 @@ def run(mode: str = "incremental", only: list | None = None) -> dict:
     try:
         from .telegram import notifier_cibles
         notifier_cibles(conn)   # alertes Telegram des cibles mots-clés (no-op sans token)
+    except Exception:
+        pass
+    try:
+        from .telegram import notifier_baisses
+        notifier_baisses(conn, depuis=debut)   # 📉 anciennes offres devenues attractives
     except Exception:
         pass
     return {"fetched": fetched, "new": new}

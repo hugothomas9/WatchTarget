@@ -57,10 +57,36 @@ _ALIASES = {
     "ヴァンクリーフ": "Van Cleef & Arpels", "van cleef": "Van Cleef & Arpels",
     "ティファニー": "Tiffany & Co.", "tiffany": "Tiffany & Co.",
     "オリス": "Oris", "oris": "Oris",
+    # --- complétés d'après le scan des marques restées en katakana (2026-08) ---
+    "ユンハンス": "Junghans", "junghans": "Junghans",
+    "ティソ": "Tissot", "tissot": "Tissot",
+    "ハミルトン": "Hamilton", "hamilton": "Hamilton",
+    "エラール": "Louis Erard", "louis erard": "Louis Erard",
+    "アイクポッド": "Ikepod", "ikepod": "Ikepod",
+    "パテック": "Patek Philippe",   # couvre « パテック フィリップ » (avec espace)
+    "ピアジェ": "Piaget", "piaget": "Piaget",
+    "ラドー": "Rado", "rado": "Rado",
+    "カシオ": "Casio", "casio": "Casio",
+    "ノルケイン": "Norqain", "norqain": "Norqain",
+    "ペキニエ": "Pequignet", "pequignet": "Pequignet",
+    "エポス": "Epos", "epos": "Epos",
+    "ポルシェ": "Porsche Design", "porsche": "Porsche Design",
+    "レイモンド": "Raymond Weil", "raymond": "Raymond Weil",
+    # PAS de fragment katakana « グラフ » : il est contenu dans クロノグラフ
+    # (chronographe) et transformerait n'importe quel chrono en montre Graff.
+    "graff": "Graff",
+    "フォルティス": "Fortis", "fortis": "Fortis",
+    "グッチ": "Gucci", "gucci": "Gucci",
+    "モーザー": "H. Moser & Cie", "moser": "H. Moser & Cie",
 }
 
 OTHER = "Autres"
 _OTHER_HINTS = ("その他", "other")
+
+
+# fragments testés du plus LONG au plus court : « グランドセイコー » doit gagner
+# sur « セイコー » qu'il contient (sinon les Grand Seiko retombaient sur Seiko)
+_ALIASES_TRIES = sorted(_ALIASES.items(), key=lambda kv: -len(kv[0]))
 
 
 def normalize_marque(raw: str) -> str:
@@ -68,7 +94,7 @@ def normalize_marque(raw: str) -> str:
     if not raw:
         return ""
     low = raw.strip().lower()
-    for frag, canon in _ALIASES.items():
+    for frag, canon in _ALIASES_TRIES:
         if frag in low:
             return canon
     for hint in _OTHER_HINTS:

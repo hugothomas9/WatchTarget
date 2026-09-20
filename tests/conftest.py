@@ -11,7 +11,7 @@ import pytest
 
 from backend import config, db
 
-_TABLES = ["watches", "favorites", "seen", "cibles",
+_TABLES = ["watches", "favorites", "seen", "cibles", "users",
            "market_prices", "ew_prices", "notified", "bot_state", "bot_meta",
            "price_history", "collecte_runs"]
 

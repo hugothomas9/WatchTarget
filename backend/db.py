@@ -303,8 +303,8 @@ SORTS = {
 
 
 def get_watches(conn, only_targets=False, only_dispo=False, marque=None,
-                famille=None, sort="benef", limit=2000):
-    q = "SELECT * FROM watches"
+                famille=None, sort="benef", limit=2000, q=None):
+    sql = "SELECT * FROM watches"
     cond, args = [], []
     if only_targets:
         cond.append("target_id IS NOT NULL")
@@ -316,11 +316,14 @@ def get_watches(conn, only_targets=False, only_dispo=False, marque=None,
     if famille:
         cond.append("famille = ?")
         args.append(famille)
+    conds, cargs = _clause_recherche(q)   # recherche texte multilingue
+    cond.extend(conds)
+    args.extend(cargs)
     if cond:
-        q += " WHERE " + " AND ".join(cond)
-    q += " ORDER BY " + SORTS.get(sort, SORTS["benef"]) + " LIMIT ?"
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY " + SORTS.get(sort, SORTS["benef"]) + " LIMIT ?"
     args.append(limit)
-    return conn.execute(q, args).fetchall()
+    return conn.execute(sql, args).fetchall()
 
 
 def list_marques(conn):
@@ -739,12 +742,29 @@ def _enrich_watch(w, ew, market):
     return d, e, m, ref_median, spread
 
 
+def _clause_recherche(q: str):
+    """Clauses LIKE portables (une par mot-clé, TOUTES requises) sur les champs
+    textuels + la famille. La famille étant déjà normalisée en LATIN à la
+    collecte, « daytona » matche une montre dont le modèle est en katakana —
+    recherche multilingue sans coût Python."""
+    conds, args = [], []
+    for tok in (q or "").lower().split():
+        conds.append(
+            "LOWER(COALESCE(marque,'') || ' ' || COALESCE(modele,'') || ' ' "
+            "|| COALESCE(reference,'') || ' ' || COALESCE(famille,'') || ' ' "
+            "|| COALESCE(description,'')) LIKE ?")
+        args.append(f"%{tok}%")
+    return conds, args
+
+
 def get_opportunities(conn, spread_min: float, liq_min: int, sort="spread",
-                      marque=None, limit=500):
+                      marque=None, limit=500, famille=None, prix_max=None,
+                      q=None):
     """Montres dispo dont la médiane marché (Chrono24) dépasse le prix détaxé
     d'au moins spread_min €, avec liquidité suffisante (n_annonces ≥ liq_min).
     Jointure en Python par référence normalisée (robuste, même logique que
-    le matching). `marque` filtre optionnellement par marque."""
+    le matching). Filtres optionnels : `marque`, `famille` (modèle générique),
+    `prix_max` (prix d'achat détaxé maxi), `q` (recherche texte multilingue)."""
     conn.row_factory = sqlite3.Row   # robuste même si l'appelant ne l'a pas fait
     # EveryWatch (prix VENDUS réels) = référence de valeur. Chrono24 = secours
     # optionnel (plus requis) : une montre avec données EW mais sans Chrono24
@@ -754,13 +774,23 @@ def get_opportunities(conn, spread_min: float, liq_min: int, sort="spread",
     market = {r["ref_norm"]: r for r in conn.execute(
         "SELECT * FROM market_prices WHERE median_eur IS NOT NULL")}
     out = []
-    q = ("SELECT * FROM watches WHERE status='dispo' "
-         "AND prix_detaxe_eur IS NOT NULL AND reference != ''")
+    sql = ("SELECT * FROM watches WHERE status='dispo' "
+           "AND prix_detaxe_eur IS NOT NULL AND reference != ''")
     args = []
     if marque:
-        q += " AND marque LIKE ?"
+        sql += " AND marque LIKE ?"
         args.append(f"%{marque}%")
-    rows = conn.execute(q, args)
+    if famille:
+        sql += " AND famille = ?"
+        args.append(famille)
+    if prix_max is not None:
+        sql += " AND prix_detaxe_eur <= ?"
+        args.append(prix_max)
+    conds, cargs = _clause_recherche(q)
+    for c in conds:
+        sql += " AND " + c
+    args.extend(cargs)
+    rows = conn.execute(sql, args)
     for w in rows:
         d, e, m, ref_median, spread = _enrich_watch(w, ew, market)
         # filtre de liquidité par source : assez de ventes réelles (EW) OU

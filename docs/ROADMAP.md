@@ -21,6 +21,21 @@ l'affichage via `backend/noms.py` (glossaire familles + couleurs + termes couran
 original conservé en info-bulle. À étendre au fil des cas non couverts.
 
 ## Fait récemment
+- **Fiche détaillée + courbe de prix (2026-08-26)** — clic sur une ligne/carte →
+  panneau photos/état/accessoires/métriques + sparkline `/api/historique` (desktop
+  + mobile).
+- **Filtres décisionnels (2026-08-26)** — filtre Modèle INDÉPENDANT (`/api/modeles`),
+  recherche texte multilingue (« daytona » matche デイトナ via la famille), prix
+  d'achat max + marge min sur les opportunités.
+- **Alerte de baisse de prix (2026-08-26)** — `telegram.notifier_baisses` : ancienne
+  offre (≥ 2 points) dont le prix boutique baisse ≥ 1 % → notif 📉 au titre distinct,
+  anti-doublon par palier, branchée en fin de collecte.
+- **Détecteurs à angle mort corrigés (2026-08-26)** — Housekihiroba : lecture SCOPÉE
+  de la ligne 在庫 (les 258 montres peuvent enfin passer « vendue ») ; Watchnian :
+  fail-safe (dispo = preuve positive, sinon INCONNU). Validés live.
+- **Glossaires enrichis (2026-08-26)** — 3 vagues noms.py (~120 termes : variantes
+  espacées, collections, accessoires) + ~20 marques katakana dans brands.py +
+  fragments longs prioritaires (Grand Seiko ≠ Seiko). Outil : `scripts/scan_glossaire.py`.
 - **Vue mobile (2026-08-19)** — cartes sous 700px (photo + détaxé/vendu/marge/liquidité)
   pour tous les onglets ; desktop inchangé. L'appli devient utilisable en boutique.
 - **Historique de prix (2026-08-19)** — table `price_history`, un point par

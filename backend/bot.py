@@ -365,6 +365,24 @@ class Transport:
         return executer(action)
 
 
+def executer_update(conn, update: dict, rate: float, transport) -> None:
+    """DÉCIDE puis ENVOIE les réponses à UN update. Partagé par les deux modes :
+    le long polling (`boucle`, process always-on) et le webhook FastAPI
+    (`api.telegram_webhook`, hébergement qui s'endort). Les erreurs réseau des
+    envois sont déjà absorbées par `executer` ; ce qui remonte d'ici est une
+    erreur de traitement, que l'appelant journalise et saute."""
+    for action in traiter_update(conn, update, rate):
+        ok = transport.envoyer(action)
+        if not ok and action.get("type") == "edit":
+            # Telegram refuse d'éditer un message vieux de plus de 48 h (400) :
+            # sans repli, l'écran a juste l'air cassé (le spinner s'éteint, rien
+            # ne s'affiche) — on rejoue la même charge en nouveau message
+            # (revue finale, point 2).
+            transport.envoyer({"type": "send", "chat_id": action["chat_id"],
+                               "text": action["text"],
+                               "keyboard": action["keyboard"]})
+
+
 def boucle(conn, rate_getter, transport, max_tours=None) -> int:
     """Long polling : un tour = un getUpdates + exécution des actions décidées.
 
@@ -396,17 +414,7 @@ def boucle(conn, rate_getter, transport, max_tours=None) -> int:
         for up in updates:
             offset = max(offset or 0, up.get("update_id", 0) + 1)
             try:
-                for action in traiter_update(conn, up, rate):
-                    ok = transport.envoyer(action)
-                    if not ok and action.get("type") == "edit":
-                        # Telegram refuse d'éditer un message vieux de plus de 48 h
-                        # (400) : sans repli, l'écran a juste l'air cassé (le
-                        # spinner s'éteint, rien ne s'affiche) — on rejoue la même
-                        # charge en nouveau message (revue finale, point 2).
-                        transport.envoyer({"type": "send",
-                                          "chat_id": action["chat_id"],
-                                          "text": action["text"],
-                                          "keyboard": action["keyboard"]})
+                executer_update(conn, up, rate, transport)
                 traites += 1
             except Exception as e:
                 print(f"[bot] update {up.get('update_id')} ignoré : {_masquer(e)}",

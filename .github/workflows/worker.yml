@@ -1,0 +1,55 @@
+# Worker des scrapers — remplace le service cron du PaaS.
+#
+# GitHub Actions fait tourner `python -m backend.worker` sur un runner jetable,
+# qui écrit dans la base Neon. Gratuit et illimité tant que le repo est PUBLIC
+# (repo privé : ~2000 min/mois, or une passe complète peut durer ~1 h → surveiller).
+#
+# Secrets à créer : repo → Settings → Secrets and variables → Actions → New secret
+#   DATABASE_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PROXY_URL (facultatif)
+#
+# ⚠️ Deux limites de GitHub Actions à connaître :
+#   1. `schedule` est désactivé automatiquement après 60 jours SANS COMMIT sur le
+#      repo. GitHub envoie un mail avant ; il suffit de le réactiver (ou de
+#      pousser un commit) pour repartir.
+#   2. Les runners sortent par des IP de datacenter Azure, plus facilement
+#      bloquées par les boutiques que ta connexion perso. Si la collecte se met à
+#      revenir vide, c'est la première piste (remède : renseigner PROXY_URL).
+name: worker
+
+on:
+  schedule:
+    # 01:00 UTC = 03:00 Paris en été, 02:00 en hiver (GitHub ne connaît que l'UTC).
+    # Heure creuse côté boutiques japonaises comme côté Chrono24.
+    - cron: "0 1 * * *"
+  workflow_dispatch:      # permet aussi de lancer une passe à la main
+
+# Deux passes simultanées écriraient en même temps dans la même base et
+# doubleraient les alertes Telegram : on laisse finir celle en cours.
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  collecte:
+    runs-on: ubuntu-latest
+    # Garde-fou : une passe normale tient en ~1 h. Au-delà, c'est qu'une boutique
+    # fait traîner les requêtes — on coupe plutôt que de laisser tourner 6 h.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-deploy.txt
+
+      - run: pip install -r backend/requirements-deploy.txt
+
+      - name: Passe complète (collecte + tri des vendues + pricing)
+        run: python -m backend.worker
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}

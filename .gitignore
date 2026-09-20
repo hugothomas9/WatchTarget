@@ -18,3 +18,6 @@ frontend/dist/
 
 # Divers
 .DS_Store
+
+# Environnement Python local
+.venv/

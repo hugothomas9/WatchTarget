@@ -3,7 +3,8 @@ from backend import verify_dispo as v
 
 def test_watchnian_soldout_et_dispo():
     assert v.status_from_html("Watchnian", "<div class='price-soldout'>SOLD</div>") == "vendue"
-    assert v.status_from_html("Watchnian", "<div class='block-goods-price'>¥100</div>") == "dispo"
+    # dispo = preuve positive (bouton panier) — cf. test_watchnian_fail_safe
+    assert v.status_from_html("Watchnian", "<button>カートに入れる</button>") == "dispo"
 
 
 def test_jackroad_availability():
@@ -69,3 +70,28 @@ def test_eccube_bouton_et_jsonld():
     assert v.status_from_html(
         "Satin Doll", '"availability":"https://schema.org/LimitedAvailability"') == "dispo"
     assert v.status_from_html("The Capital", "<html>?</html>") is None
+
+
+def test_watchnian_fail_safe_inconnu_par_defaut():
+    """Réécriture anti-angle-mort : DISPO exige une preuve POSITIVE (bouton
+    panier). Une page méconnaissable (structure changée, redirection vers un
+    listing) → INCONNU — l'ancien « dispo par défaut » gardait des vendues en
+    vitrine à vie dès que le site changeait."""
+    assert v.status_from_html("Watchnian", "<div class='price-soldout'>SOLD OUT</div>") == "vendue"
+    assert v.status_from_html("Watchnian", "<button>カートに入れる</button>") == "dispo"
+    # prix affiché SANS panier : présent aussi sur les pages vendues → ambigu
+    assert v.status_from_html("Watchnian", "<div class='block-goods-price'>¥100</div>") is None
+    assert v.status_from_html("Watchnian", "<html>accueil quelconque</html>") is None
+
+
+def test_housekihiroba_ligne_zaiko_scopee():
+    """La valeur lue doit venir de la LIGNE 在庫 du tableau th/td — le texte
+    global contient « 在庫なし » dans un template <script> sur TOUTES les fiches
+    (c'est l'angle mort : 258 montres ne pouvaient jamais passer vendues)."""
+    dispo = ("<table><tr><th>在庫</th><td>在庫有り(In Stock) ご注文頂けます。</td></tr></table>"
+             "<script>var t='在庫なし';</script>")
+    assert v.status_from_html("Housekihiroba", dispo) == "dispo"
+    vendu = "<table><tr><th>在庫</th><td>在庫なし</td></tr></table>"
+    assert v.status_from_html("Housekihiroba", vendu) == "vendue"
+    # pas de ligne 在庫 identifiable → INCONNU (jamais un statut par défaut)
+    assert v.status_from_html("Housekihiroba", "<html>rien</html>") is None

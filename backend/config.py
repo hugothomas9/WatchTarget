@@ -35,6 +35,13 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Bot en mode WEBHOOK : secret partagé avec Telegram (setWebhook secret_token),
+# renvoyé dans l'en-tête X-Telegram-Bot-Api-Secret-Token à chaque appel. Vide =
+# endpoint /api/telegram/webhook désactivé (mode long polling, cf backend/bot.py).
+# Nécessaire sur un hébergement qui s'endort (Render free) où aucun process ne
+# peut faire de long polling en continu. Voir scripts/set_webhook.py.
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+
 # Base de données : vide = SQLite local (DB_PATH) ; sinon URL PostgreSQL en prod
 # (ex postgresql://user:pass@host:5432/scrapmontres). Voir docs/specs/deploiement-*.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")

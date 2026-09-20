@@ -127,6 +127,85 @@ def notifier_cibles(conn=None) -> int:
     return n
 
 
+def _message_baisse(w: dict, libelles: list[str], ancien_ttc: float,
+                    nouveau_ttc: float, rate: float | None = None) -> str:
+    """Message de BAISSE DE PRIX — TITRE DISTINCT (📉) pour le différencier d'une
+    alerte d'arrivage. Même règle « rendu sobre » que _message : le prix BOUTIQUE
+    (donnée publique de l'annonce) uniquement — jamais détaxé/EveryWatch/marge."""
+    from . import bot_ui
+    if rate is None:
+        from . import fx
+        rate = fx.get_rate()
+    m = bot_ui.preparer_montres([w], rate)[0]
+    pct = round(100 * (ancien_ttc - nouveau_ttc) / ancien_ttc)
+    def fmt(v):
+        return "¥" + f"{v:,.0f}".replace(",", " ")
+    lignes = [f"📉 <b>Baisse de prix — {bot_ui._esc(bot_ui.titre_bloc(m))}</b>",
+              f"{fmt(ancien_ttc)} → <b>{fmt(nouveau_ttc)}</b> (−{pct} %)"]
+    if libelles:
+        lignes.append("Alerte : " + ", ".join(bot_ui._esc(l) for l in libelles))
+    if m.get("url"):
+        lignes.append(bot_ui._esc(m["url"]))
+    return "\n".join(lignes)
+
+
+SEUIL_BAISSE = 0.01   # −1 % minimum : en deçà c'est un ajustement, pas une affaire
+
+
+def notifier_baisses(conn=None, depuis: str = "") -> int:
+    """Notifie les BAISSES DE PRIX : une montre DÉJÀ CONNUE (≥ 2 points
+    d'historique) dont le prix boutique vient de baisser d'au moins 1 % — une
+    ancienne offre redevenue attractive. Destinataires : propriétaires des
+    alertes mots-clés qui matchent. Anti-doublon PAR PALIER de prix (une
+    nouvelle baisse re-notifie ; le même palier, jamais deux fois). Détection
+    sur prix_ttc (yen boutique) : insensible aux mouvements du change."""
+    close = conn is None
+    conn = conn or db.connect()
+    conn.executescript(_SCHEMA)
+    from . import cibles as _cibles
+    regles = db.list_cibles(conn, actives_only=True)
+    n = 0
+    if regles and config.TELEGRAM_BOT_TOKEN and depuis:
+        from . import fx
+        rate = fx.get_rate()
+        recents = [r[0] for r in conn.execute(
+            "SELECT DISTINCT uid FROM price_history WHERE seen_at >= ?",
+            (depuis,))]
+        for uid in recents:
+            pts = conn.execute(
+                "SELECT prix_ttc FROM price_history WHERE uid=? "
+                "ORDER BY seen_at DESC LIMIT 2", (uid,)).fetchall()
+            if len(pts) < 2 or not pts[0]["prix_ttc"] or not pts[1]["prix_ttc"]:
+                continue          # < 2 points = nouvel arrivage, pas une baisse
+            nouveau, ancien = pts[0]["prix_ttc"], pts[1]["prix_ttc"]
+            if nouveau >= ancien * (1 - SEUIL_BAISSE):
+                continue          # hausse, ou variation sous le seuil
+            w = conn.execute(
+                "SELECT * FROM watches WHERE uid=? AND status='dispo'",
+                (uid,)).fetchone()
+            if not w:
+                continue          # vendue/retirée entre-temps
+            w = dict(w)
+            blob = _cibles.blob_recherche(w)
+            for c in regles:
+                if not _cibles.matche(c["mots_cles"], blob):
+                    continue
+                typ = f"baisse:{c['id']}:{int(nouveau)}"
+                if _deja_notifie(conn, uid, typ):
+                    continue
+                dest = c["telegram_id"] if "telegram_id" in c.keys() else None
+                resultat = envoyer(
+                    _message_baisse(w, [c["libelle"] or c["mots_cles"]],
+                                    ancien, nouveau, rate=rate), chat_id=dest)
+                if resultat:
+                    _marquer(conn, uid, typ)
+                    if resultat is True:
+                        n += 1
+    if close:
+        conn.close()
+    return n
+
+
 def main():
     if "--test" in sys.argv:
         ok = envoyer("✅ Test WatchTarget — les alertes de cibles fonctionnent.")
