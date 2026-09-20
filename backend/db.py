@@ -303,9 +303,21 @@ SORTS = {
 
 
 def get_watches(conn, only_targets=False, only_dispo=False, marque=None,
-                famille=None, sort="benef", limit=2000, q=None):
+                famille=None, sort="benef", limit=2000, q=None,
+                prix_min=None, prix_max=None):
+    """`prix_min`/`prix_max` : fourchette sur le prix d'ACHAT détaxé en euros —
+    ce que coûte la montre, pas ce qu'elle vaut. Le front s'en sert pour ses
+    tranches de budget (< 1 k€, 1–5 k€, 5–10 k€, > 10 k€) ; bornes inclusives en
+    bas, exclusives en haut, pour qu'une montre pile à 5 000 € tombe dans une
+    seule tranche."""
     sql = "SELECT * FROM watches"
     cond, args = [], []
+    if prix_min is not None:
+        cond.append("prix_detaxe_eur >= ?")
+        args.append(prix_min)
+    if prix_max is not None:
+        cond.append("prix_detaxe_eur < ?")
+        args.append(prix_max)
     if only_targets:
         cond.append("target_id IS NOT NULL")
     if only_dispo:
@@ -759,7 +771,7 @@ def _clause_recherche(q: str):
 
 def get_opportunities(conn, spread_min: float, liq_min: int, sort="spread",
                       marque=None, limit=500, famille=None, prix_max=None,
-                      q=None):
+                      q=None, prix_min=None):
     """Montres dispo dont la médiane marché (Chrono24) dépasse le prix détaxé
     d'au moins spread_min €, avec liquidité suffisante (n_annonces ≥ liq_min).
     Jointure en Python par référence normalisée (robuste, même logique que
@@ -783,8 +795,13 @@ def get_opportunities(conn, spread_min: float, liq_min: int, sort="spread",
     if famille:
         sql += " AND famille = ?"
         args.append(famille)
+    if prix_min is not None:
+        sql += " AND prix_detaxe_eur >= ?"
+        args.append(prix_min)
     if prix_max is not None:
-        sql += " AND prix_detaxe_eur <= ?"
+        # borne haute EXCLUSIVE, comme get_watches : les tranches de budget du
+        # front (< 1 k€, 1–5 k€, 5–10 k€, > 10 k€) ne doivent pas se chevaucher.
+        sql += " AND prix_detaxe_eur < ?"
         args.append(prix_max)
     conds, cargs = _clause_recherche(q)
     for c in conds:

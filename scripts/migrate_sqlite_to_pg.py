@@ -4,9 +4,10 @@ Usage :
   DATABASE_URL=postgresql://user:pass@host:5432/scrapmontres \
     python -m scripts.migrate_sqlite_to_pg [chemin_sqlite]
 
-Copie chaque table (watches, prix, favoris, cibles…) de la base SQLite locale vers
-PostgreSQL. Idempotent (ON CONFLICT DO NOTHING) → relançable sans doublon. Recale la
-séquence d'id de `cibles` après coup.
+Copie chaque table (watches, prix, favoris, cibles, historique…) de SQLite vers
+PostgreSQL. Idempotent → relançable sans doublon : ON CONFLICT DO NOTHING pour les
+tables à clé, et saut pur et simple pour les tables historiques sans clé unique
+(voir _TABLES_HISTORIQUES). Recale la séquence d'id de `cibles` après coup.
 """
 import sqlite3
 import sys
@@ -16,11 +17,22 @@ from backend import config, db
 _TABLES = ["watches", "favorites", "seen", "cibles",
            "market_prices", "ew_prices", "notified"]
 
+# Tables HISTORIQUES (append-only, sans clé unique : un point par changement de
+# prix, une ligne par run de collecte). `ON CONFLICT DO NOTHING` ne les protège
+# donc de rien — les recopier une seconde fois DOUBLERAIT les courbes. Elles ne
+# sont reprises que si la table de destination est vide, ce qui garde la
+# migration relançable sans dégât.
+_TABLES_HISTORIQUES = ["price_history", "collecte_runs"]
+
 
 def _table_exists_sqlite(src, table) -> bool:
     return src.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
         (table,)).fetchone() is not None
+
+
+def _deja_peuplee(dst, table) -> bool:
+    return dst.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0
 
 
 def migrate(sqlite_path: str, pg_url: str) -> dict:
@@ -31,8 +43,11 @@ def migrate(sqlite_path: str, pg_url: str) -> dict:
     db.init_db(dst)
 
     counts = {}
-    for t in _TABLES:
+    for t in _TABLES + _TABLES_HISTORIQUES:
         if not _table_exists_sqlite(src, t):
+            continue
+        if t in _TABLES_HISTORIQUES and _deja_peuplee(dst, t):
+            counts[t] = "déjà peuplée, ignorée"
             continue
         rows = src.execute(f"SELECT * FROM {t}").fetchall()
         if not rows:

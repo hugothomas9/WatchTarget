@@ -77,3 +77,57 @@ def test_stock_recherche_multilingue(tmp_path, monkeypatch):
     # deux mots = ET (tous requis)
     assert client.get("/api/stock?q=rolex submariner").json()[0]["reference"] == "126610LN"
     assert client.get("/api/stock?q=patek").json() == []
+
+
+# --- Tranches de budget (< 1 k€, 1–5 k€, 5–10 k€, > 10 k€) -------------------
+# Le front envoie une FOURCHETTE (prix_min/prix_max) sur le prix d'achat détaxé
+# en euros ; le backend n'a pas à connaître les tranches, seulement les bornes.
+def _seed_budget(conn):
+    for i, prix in enumerate([800.0, 3000.0, 7000.0, 20000.0]):
+        db.upsert_watch(conn, {"uid": f"B:R{i}:u{i}", "boutique": "B",
+                               "reference": f"R{i}", "url": f"u{i}",
+                               "marque": "Rolex", "prix_detaxe_eur": prix,
+                               "status": "dispo"})
+
+
+def test_stock_filtre_par_tranche_de_budget(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    _seed_budget(conn)
+    client = TestClient(api.app)
+    # < 1 000 € : borne haute EXCLUSIVE côté tranche suivante, donc 1000 n'est
+    # jamais compté deux fois (on passe prix_max=1000 et prix_min=1000).
+    assert [w["reference"] for w in
+            client.get("/api/stock?prix_max=1000").json()] == ["R0"]
+    assert [w["reference"] for w in
+            client.get("/api/stock?prix_min=1000&prix_max=5000").json()] == ["R1"]
+    assert [w["reference"] for w in
+            client.get("/api/stock?prix_min=5000&prix_max=10000").json()] == ["R2"]
+    assert [w["reference"] for w in
+            client.get("/api/stock?prix_min=10000").json()] == ["R3"]
+
+
+def test_stock_sans_tranche_renvoie_tout(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    _seed_budget(conn)
+    client = TestClient(api.app)
+    assert len(client.get("/api/stock").json()) == 4
+
+
+def test_montre_sans_prix_exclue_des_tranches(tmp_path, monkeypatch):
+    """Une fiche sans prix détaxé (scrape partiel) ne doit apparaître dans AUCUNE
+    tranche — sinon elle remonterait dans toutes, prix inconnu = bruit."""
+    conn = _conn(tmp_path, monkeypatch)
+    _seed_budget(conn)
+    db.upsert_watch(conn, {"uid": "B:SANSPRIX:u", "boutique": "B",
+                           "reference": "SANSPRIX", "url": "u", "marque": "Rolex"})
+    client = TestClient(api.app)
+    refs = [w["reference"] for w in client.get("/api/stock?prix_min=10000").json()]
+    assert refs == ["R3"]
+    assert len(client.get("/api/stock").json()) == 5   # mais visible sans filtre
+
+
+def test_opportunites_filtre_tranche_basse(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    _seed(conn)
+    opps = db.get_opportunities(conn, 700, 5, prix_min=10000)
+    assert [o["reference"] for o in opps] == ["116500LN"]   # 26k€, la 9k€ sort

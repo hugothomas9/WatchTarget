@@ -33,6 +33,17 @@ const yen = (v) => v == null ? '—' : '¥' + Math.round(v).toLocaleString('fr-F
 // étirer le <select> sur toute la barre (option la plus large = largeur du select)
 const _selStyle = { maxWidth: 200, flex: '0 0 auto' }
 
+// Tranches de budget = prix d'ACHAT détaxé en € (ce que la montre coûte au Japon).
+// Bornes [min, max[ : max exclusif côté serveur, donc une montre pile à 5 000 €
+// n'apparaît que dans « 5 – 10 k€ », jamais dans deux tranches à la fois.
+const BUDGETS = {
+  '': { label: 'Tous' },
+  'moins1k': { label: 'moins de 1 000 €', max: 1000 },
+  '1a5k': { label: '1 000 – 5 000 €', min: 1000, max: 5000 },
+  '5a10k': { label: '5 000 – 10 000 €', min: 5000, max: 10000 },
+  'plus10k': { label: 'plus de 10 000 €', min: 10000 },
+}
+
 // Vue MOBILE : l'utilisateur type est debout dans une boutique au Japon, sur son
 // téléphone — un tableau de 15 colonnes y est inutilisable. Sous 700px on bascule
 // en cartes ; le desktop garde le tableau inchangé.
@@ -362,6 +373,7 @@ export default function App() {
   const [qInput, setQInput] = useState('')     // saisie recherche (immédiate)
   const [qDeb, setQDeb] = useState('')         // valeur débouncée envoyée à l'API
   const [prixMax, setPrixMax] = useState('')
+  const [budget, setBudget] = useState('')     // clé dans BUDGETS ('' = toutes)
   const [margeMin, setMargeMin] = useState('')
   const [detail, setDetail] = useState(null)   // montre ouverte en fiche détaillée
 
@@ -441,6 +453,14 @@ export default function App() {
     const ctrl = new AbortController()
     const s = page === 'stock' && sort === 'benef' ? 'date' : sort
     const triOpp = ['liquidite', 'net', 'volatilite'].includes(sort) ? sort : 'spread'
+    // Tranche de budget → bornes envoyées au serveur. Sur « Opportunités », le
+    // champ « Achat max € » reste utilisable pour resserrer : on garde alors la
+    // borne la PLUS BASSE des deux, sinon un plafond saisi à la main serait
+    // silencieusement ignoré par la tranche (ou l'inverse).
+    const b = BUDGETS[budget] || {}
+    const hauts = [b.max, prixMax ? Number(prixMax) : null].filter(v => v != null)
+    const bornes = { ...(b.min != null ? { prix_min: b.min } : {}),
+                     ...(hauts.length ? { prix_max: Math.min(...hauts) } : {}) }
     const qs = page === 'cibles'
       ? ''
       : page === 'favoris'
@@ -448,10 +468,11 @@ export default function App() {
       : page === 'opportunites'
       ? '?' + new URLSearchParams({ marque, famille, sort: triOpp,
                                     ...(qDeb ? { q: qDeb } : {}),
-                                    ...(prixMax ? { prix_max: prixMax } : {}),
+                                    ...bornes,
                                     ...(margeMin ? { spread_min: margeMin } : {}) }).toString()
       : '?' + new URLSearchParams({ marque, famille, sort: s,
                                     ...(qDeb ? { q: qDeb } : {}),
+                                    ...bornes,
                                     ...(page === 'stock' && dispoOnly ? { dispo: 1 } : {}) }).toString()
     setError('')
     fetch(`/api/${page}${qs}`, { signal: ctrl.signal })
@@ -459,7 +480,7 @@ export default function App() {
       .then(setRows)
       .catch(e => { if (e.name !== 'AbortError') setError(String(e.message || e)) })
     return () => ctrl.abort()
-  }, [page, marque, famille, sort, refresh, dispoOnly, qDeb, prixMax, margeMin])
+  }, [page, marque, famille, sort, refresh, dispoOnly, qDeb, prixMax, margeMin, budget])
 
   const reload = () => setRefresh(n => n + 1)
 
@@ -532,6 +553,14 @@ export default function App() {
           <option value="">Tous</option>
           {familles.map(f => <option key={f} value={f}>{f}</option>)}
         </select>
+        {(page === 'stock' || page === 'opportunites') && <>
+          <span style={{ whiteSpace: 'nowrap' }}>Budget :</span>
+          <select value={budget} onChange={e => setBudget(e.target.value)}
+                  title="prix d'achat détaxé au Japon" style={_selStyle}>
+            {Object.entries(BUDGETS).map(([k, b]) =>
+              <option key={k} value={k}>{b.label}</option>)}
+          </select>
+        </>}
         {(page === 'stock' || page === 'opportunites') && (
           <input value={qInput} onChange={e => setQInput(e.target.value)}
                  placeholder="🔍 rechercher (réf, modèle…)"

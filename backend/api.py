@@ -78,11 +78,15 @@ def _rows(rows):
 
 @app.get("/api/stock")
 def stock(marque: str = "", famille: str = "", sort: str = "date",
-          dispo: int = 0, q: str = ""):
+          dispo: int = 0, q: str = "", prix_min: float = None,
+          prix_max: float = None):
+    """`prix_min`/`prix_max` : fourchette de prix d'achat détaxé en € (tranches
+    de budget du front)."""
     with _conn() as conn:
         return _rows(db.get_watches(conn, marque=marque or None,
                                     famille=famille or None, sort=sort,
-                                    only_dispo=bool(dispo), q=q or None))
+                                    only_dispo=bool(dispo), q=q or None,
+                                    prix_min=prix_min, prix_max=prix_max))
 
 
 @app.get("/api/modeles")
@@ -219,7 +223,7 @@ def marques():
 @app.get("/api/opportunites")
 def opportunites(spread_min: float = None, liq_min: int = None,
                  sort: str = "spread", marque: str = "", famille: str = "",
-                 prix_max: float = None, q: str = ""):
+                 prix_max: float = None, q: str = "", prix_min: float = None):
     from .config import SPREAD_MIN_EUR, LIQUIDITY_MIN_LISTINGS
     with _conn() as conn:
         rows = db.get_opportunities(
@@ -227,7 +231,7 @@ def opportunites(spread_min: float = None, liq_min: int = None,
             spread_min=spread_min if spread_min is not None else SPREAD_MIN_EUR,
             liq_min=liq_min if liq_min is not None else LIQUIDITY_MIN_LISTINGS,
             sort=sort, marque=marque or None, famille=famille or None,
-            prix_max=prix_max, q=q or None)
+            prix_max=prix_max, prix_min=prix_min, q=q or None)
         return _rows(rows)
 
 
