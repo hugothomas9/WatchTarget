@@ -386,7 +386,11 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
-  const [dispoOnly, setDispoOnly] = useState(false)
+  // Vendues MASQUÉES par défaut : les 2/3 du stock en base sont des montres
+  // vendues ou retirées (historique de prix, tri des dispos) — les afficher
+  // d'office noyait les montres réellement achetables. La case permet de les
+  // ressortir, l'historique n'est pas perdu.
+  const [dispoOnly, setDispoOnly] = useState(true)
   const [favUids, setFavUids] = useState(() => new Set())
   const [alertes, setAlertes] = useState([])
   const [nouvelleAlerte, setNouvelleAlerte] = useState('')
@@ -593,9 +597,9 @@ export default function App() {
         )}
         {page === 'stock' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-            <input type="checkbox" checked={dispoOnly}
-                   onChange={e => setDispoOnly(e.target.checked)} />
-            Dispo uniquement
+            <input type="checkbox" checked={!dispoOnly}
+                   onChange={e => setDispoOnly(!e.target.checked)} />
+            Afficher les vendues
           </label>
         )}
         </>}
